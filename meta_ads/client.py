@@ -165,17 +165,25 @@ class MetaAdsClient:
         insights = self.account.get_insights(fields=insight_fields, params=params)
         rows = [i.export_all_data() for i in insights]
 
-        # Enriquecer com status e objective da campanha
+        # Enriquecer com campos da campanha não disponíveis em insights
         campaigns = self.account.get_campaigns(fields=[
             Campaign.Field.id,
             Campaign.Field.status,
+            Campaign.Field.effective_status,
             Campaign.Field.objective,
+            Campaign.Field.daily_budget,
+            Campaign.Field.lifetime_budget,
         ])
         campaign_meta = {c["id"]: c for c in (c.export_all_data() for c in campaigns)}
         for row in rows:
             meta = campaign_meta.get(row.get("campaign_id"), {})
             row["status"] = meta.get("status", "")
+            row["effective_status"] = meta.get("effective_status", "")
             row["objective"] = meta.get("objective", "")
+            daily = meta.get("daily_budget", "")
+            lifetime = meta.get("lifetime_budget", "")
+            row["budget"] = daily if daily else lifetime
+            row["budget_type"] = "Diário" if daily else "Vitalício"
 
         return rows
 
