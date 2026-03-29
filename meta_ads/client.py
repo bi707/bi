@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from typing import Any
 
 from dotenv import load_dotenv
@@ -121,6 +122,62 @@ class MetaAdsClient:
 
         insights = self.account.get_insights(fields=fields, params=params)
         return [i.export_all_data() for i in insights]
+
+    def get_campaign_report(
+        self,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Retorna relatório de campanhas para um período específico.
+
+        Parâmetros
+        ----------
+        since : str | None
+            Data de início no formato YYYY-MM-DD. Padrão: primeiro dia do mês atual.
+        until : str | None
+            Data de fim no formato YYYY-MM-DD. Padrão: hoje.
+        """
+        today = date.today()
+        since = since or today.replace(day=1).strftime("%Y-%m-%d")
+        until = until or today.strftime("%Y-%m-%d")
+
+        insight_fields = [
+            AdsInsights.Field.campaign_id,
+            AdsInsights.Field.campaign_name,
+            AdsInsights.Field.impressions,
+            AdsInsights.Field.reach,
+            AdsInsights.Field.clicks,
+            AdsInsights.Field.spend,
+            AdsInsights.Field.cpm,
+            AdsInsights.Field.cpc,
+            AdsInsights.Field.ctr,
+            AdsInsights.Field.frequency,
+            AdsInsights.Field.actions,
+            AdsInsights.Field.cost_per_action_type,
+            AdsInsights.Field.date_start,
+            AdsInsights.Field.date_stop,
+        ]
+        params = {
+            "level": "campaign",
+            "time_range": {"since": since, "until": until},
+        }
+        insights = self.account.get_insights(fields=insight_fields, params=params)
+        rows = [i.export_all_data() for i in insights]
+
+        # Enriquecer com status e objective da campanha
+        campaigns = self.account.get_campaigns(fields=[
+            Campaign.Field.id,
+            Campaign.Field.status,
+            Campaign.Field.objective,
+        ])
+        campaign_meta = {c["id"]: c for c in (c.export_all_data() for c in campaigns)}
+        for row in rows:
+            meta = campaign_meta.get(row.get("campaign_id"), {})
+            row["status"] = meta.get("status", "")
+            row["objective"] = meta.get("objective", "")
+
+        return rows
 
     # ------------------------------------------------------------------
     # Informações da conta
