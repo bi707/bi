@@ -97,37 +97,64 @@ def run():
             except Exception:
                 pass
 
-        # Ajusta período para "Este mês"
+        # Ajusta período para "Este mês" (1º do mês até hoje)
         print("Ajustando período para o mês atual...")
         try:
-            for label in ["Últimos 30 dias", "Last 30 days", "Ontem", "Yesterday", "Hoje", "Today"]:
-                try:
-                    btn = page.locator(f"text='{label}'").first
-                    if btn.is_visible(timeout=2000):
-                        btn.click()
-                        break
-                except Exception:
-                    pass
+            # Abre o seletor de datas clicando em qualquer texto de período visível
+            page.evaluate("""
+                () => {
+                    const els = Array.from(document.querySelectorAll('[role="button"]'));
+                    const dateBtn = els.find(el =>
+                        el.innerText && (
+                            el.innerText.includes('dias') ||
+                            el.innerText.includes('mês') ||
+                            el.innerText.includes('days') ||
+                            el.innerText.includes('month') ||
+                            el.innerText.includes('Hoje') ||
+                            el.innerText.includes('Today') ||
+                            el.innerText.includes('Ontem') ||
+                            el.innerText.includes('fev') ||
+                            el.innerText.includes('mar') ||
+                            el.innerText.includes('jan')
+                        )
+                    );
+                    if (dateBtn) dateBtn.click();
+                }
+            """)
+            page.wait_for_timeout(1500)
 
-            for label in ["Este mês", "This month"]:
-                try:
-                    opt = page.locator(f"text='{label}'").first
-                    if opt.is_visible(timeout=2000):
-                        opt.click()
-                        break
-                except Exception:
-                    pass
+            # Clica em "Este mês"
+            page.evaluate("""
+                () => {
+                    const els = Array.from(document.querySelectorAll('[role="option"], [role="menuitem"], li, div'));
+                    const opt = els.find(el =>
+                        el.innerText && (
+                            el.innerText.trim() === 'Este mês' ||
+                            el.innerText.trim() === 'This month'
+                        )
+                    );
+                    if (opt) opt.click();
+                }
+            """)
+            page.wait_for_timeout(1500)
 
-            for label in ["Atualizar", "Update", "Aplicar", "Apply"]:
-                try:
-                    btn = page.locator(f"text='{label}'").first
-                    if btn.is_visible(timeout=2000):
-                        btn.click()
-                        break
-                except Exception:
-                    pass
-
+            # Confirma clicando em Atualizar/Update
+            page.evaluate("""
+                () => {
+                    const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                    const btn = btns.find(el =>
+                        el.innerText && (
+                            el.innerText.trim() === 'Atualizar' ||
+                            el.innerText.trim() === 'Update' ||
+                            el.innerText.trim() === 'Aplicar' ||
+                            el.innerText.trim() === 'Apply'
+                        )
+                    );
+                    if (btn) btn.click();
+                }
+            """)
             page.wait_for_timeout(3000)
+            print("  Período ajustado: 1º do mês até hoje.")
         except Exception as e:
             print(f"Aviso ao ajustar data: {e}")
 
