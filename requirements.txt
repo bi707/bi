@@ -1,3 +1,4 @@
 facebook-business==20.0.2
 python-dotenv==1.0.1
 requests==2.32.3
+playwright==1.51.0
