@@ -42,10 +42,33 @@ def run():
 
         # 1. Login no Facebook
         print("Abrindo Facebook...")
-        page.goto("https://www.facebook.com/login")
-        page.fill("#email", EMAIL)
-        page.fill("#pass", PASSWORD)
-        page.click("[name='login']")
+        page.goto("https://www.facebook.com/login", wait_until="networkidle")
+
+        # Tenta diferentes seletores para o campo de e-mail
+        email_selectors = ["#email", "input[name='email']", "input[type='email']"]
+        for sel in email_selectors:
+            try:
+                page.wait_for_selector(sel, timeout=10_000)
+                page.fill(sel, EMAIL)
+                break
+            except PlaywrightTimeout:
+                continue
+
+        pass_selectors = ["#pass", "input[name='pass']", "input[type='password']"]
+        for sel in pass_selectors:
+            try:
+                page.fill(sel, PASSWORD)
+                break
+            except Exception:
+                continue
+
+        login_selectors = ["[name='login']", "button[type='submit']", "#loginbutton"]
+        for sel in login_selectors:
+            try:
+                page.click(sel)
+                break
+            except Exception:
+                continue
 
         # Aguarda possível 2FA ou checkpoint
         print("Aguardando login... (complete qualquer verificação se solicitado)")
@@ -53,6 +76,7 @@ def run():
             page.wait_for_url("**/facebook.com/**", timeout=60_000)
         except PlaywrightTimeout:
             pass
+        page.wait_for_timeout(3000)
 
         # 2. Navega para o Ads Manager
         print("Abrindo Ads Manager...")
