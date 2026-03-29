@@ -1,4 +1,7 @@
-facebook-business==20.0.2
+functions-framework==3.8.1
 gspread==6.1.2
 google-auth==2.29.0
-functions-framework==3.8.1
+google-api-python-client==2.126.0
+google-auth-httplib2==0.2.0
+beautifulsoup4==4.12.3
+requests==2.32.3

@@ -1,10 +1,10 @@
 """
-Script de deploy da Cloud Function no Google Cloud.
+Script de deploy da Cloud Function no Google Cloud (Plano C).
 
 Pré-requisitos:
-  1. gcloud CLI instalado (cloud.google.com/sdk/docs/install)
-  2. Rodado uma vez: gcloud auth login
-  3. Este script deve ser rodado na pasta C:\\Users\\Vanessa\\bi
+  1. gcloud CLI instalado e autenticado (gcloud auth login)
+  2. gmail_auth.py já rodado → gmail_token.json gerado
+  3. Rodar na pasta C:\\Users\\Vanessa\\bi
 
 Uso:
     python deploy_cloud.py
@@ -12,16 +12,16 @@ Uso:
 
 import base64
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
-PROJECT_ID = "analytics-contas"
-REGION = "us-central1"
-FUNCTION_NAME = "meta-ads-sheets"
-CREDENTIALS_FILE = "credentials.json"
-ENV_FILE = ".env"
+PROJECT_ID     = "analytics-contas"
+REGION         = "us-central1"
+FUNCTION_NAME  = "meta-ads-sheets"
+FUNCTION_URL   = "https://meta-ads-sheets-zjeanpzfeq-uc.a.run.app"
+
+REQUIRED_FILES = ["credentials.json", "gmail_token.json", ".env"]
 
 
 def load_env(path: str) -> dict:
@@ -35,51 +35,51 @@ def load_env(path: str) -> dict:
     return env
 
 
-def encode_credentials(path: str) -> str:
+def encode_file(path: str) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
 
 def run(cmd: list, check=True):
     print(f"\n$ {' '.join(cmd)}")
-    result = subprocess.run(cmd, check=check, capture_output=False, shell=True)
-    return result
+    return subprocess.run(cmd, check=check, shell=True)
 
 
 def main():
     # Verifica arquivos necessários
-    for f in [CREDENTIALS_FILE, ENV_FILE]:
-        if not Path(f).exists():
-            print(f"ERRO: arquivo '{f}' não encontrado na pasta atual.")
-            sys.exit(1)
+    missing = [f for f in REQUIRED_FILES if not Path(f).exists()]
+    if missing:
+        for f in missing:
+            print(f"ERRO: arquivo '{f}' não encontrado.")
+            if f == "gmail_token.json":
+                print("  → Rode primeiro: python gmail_auth.py")
+        sys.exit(1)
 
-    print("=== Deploy Meta Ads → Google Sheets (Cloud Function) ===\n")
+    print("=== Deploy Plano C — Gmail → CSV → Google Sheets ===\n")
 
-    # Carrega variáveis de ambiente
-    env = load_env(ENV_FILE)
-    creds_b64 = encode_credentials(CREDENTIALS_FILE)
+    env           = load_env(".env")
+    creds_b64     = encode_file("credentials.json")
+    gmail_b64     = encode_file("gmail_token.json")
 
-    # Monta as variáveis de ambiente para a Cloud Function
     env_vars = ",".join([
+        f"GOOGLE_CREDENTIALS_B64={creds_b64}",
+        f"GMAIL_TOKEN_B64={gmail_b64}",
         f"META_APP_ID={env['META_APP_ID']}",
         f"META_APP_SECRET={env['META_APP_SECRET']}",
         f"META_ACCESS_TOKEN={env['META_ACCESS_TOKEN']}",
         f"META_AD_ACCOUNT_ID={env['META_AD_ACCOUNT_ID']}",
-        f"GOOGLE_CREDENTIALS_B64={creds_b64}",
     ])
 
-    # Define o projeto
     run(["gcloud", "config", "set", "project", PROJECT_ID])
 
-    # Habilita APIs necessárias
-    print("\nHabilitando APIs do Google Cloud...")
+    print("\nHabilitando APIs necessárias...")
     run(["gcloud", "services", "enable",
          "cloudfunctions.googleapis.com",
          "cloudscheduler.googleapis.com",
          "cloudbuild.googleapis.com",
-         "run.googleapis.com"])
+         "run.googleapis.com",
+         "gmail.googleapis.com"])
 
-    # Deploy da Cloud Function
     print("\nFazendo deploy da Cloud Function...")
     run([
         "gcloud", "functions", "deploy", FUNCTION_NAME,
@@ -95,31 +95,25 @@ def main():
         f"--set-env-vars={env_vars}",
     ])
 
-    # Pega a URL da função
-    result = subprocess.run([
-        "gcloud", "functions", "describe", FUNCTION_NAME,
-        "--gen2", f"--region={REGION}", "--format=value(serviceConfig.uri)"
-    ], capture_output=True, text=True)
-    function_url = result.stdout.strip()
+    print(f"\nCloud Function: {FUNCTION_URL}")
 
-    print(f"\nCloud Function disponível em:\n  {function_url}")
-
-    # Cria o agendamento no Cloud Scheduler (2x por dia)
-    print("\nConfigurando Cloud Scheduler (8h e 20h, horário de Brasília)...")
-
-    for hora, job_name in [("8", f"{FUNCTION_NAME}-manha"), ("20", f"{FUNCTION_NAME}-tarde")]:
-        run([
-            "gcloud", "scheduler", "jobs", "create", "http", job_name,
-            f"--location={REGION}",
-            f"--schedule=0 {hora} * * *",
-            "--time-zone=America/Sao_Paulo",
-            f"--uri={function_url}",
-            "--http-method=GET",
-        ], check=False)  # check=False pois o job pode já existir
+    # Cloud Scheduler — 8h (Brasília)
+    print("\nConfigurando agendamento às 8h (Brasília)...")
+    run([
+        "gcloud", "scheduler", "jobs", "create", "http", f"{FUNCTION_NAME}-8h",
+        f"--location={REGION}",
+        "--schedule=0 8 * * *",
+        "--time-zone=America/Sao_Paulo",
+        f"--uri={FUNCTION_URL}",
+        "--http-method=GET",
+        "--attempt-deadline=320s",
+    ], check=False)
 
     print("\n" + "="*55)
-    print("Deploy concluído com sucesso!")
-    print(f"A planilha será atualizada todos os dias às 8h e 20h.")
+    print("Deploy concluído!")
+    print("A planilha será atualizada todo dia às 8h.")
+    print(f"Para testar agora:")
+    print(f"  gcloud scheduler jobs run {FUNCTION_NAME}-8h --location={REGION}")
     print("="*55)
 
 

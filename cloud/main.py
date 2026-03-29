@@ -1,220 +1,192 @@
 """
-Cloud Function - Meta Ads → Google Sheets
-Acionada pelo Cloud Scheduler 2x por dia.
+Plano C — Cloud Function
+Fluxo: Gmail (e-mail do Meta) → download CSV → Google Sheets
+
+Acionada pelo Cloud Scheduler todo dia às 8h (horário de Brasília).
 """
 
 import base64
+import csv
+import io
 import json
 import os
-from datetime import date
+import re
 
 import functions_framework
 import gspread
-from facebook_business.adobjects.adaccount import AdAccount
-from facebook_business.adobjects.adsinsights import AdsInsights
-from facebook_business.adobjects.campaign import Campaign
-from facebook_business.api import FacebookAdsApi
-from google.oauth2.service_account import Credentials
+import requests
+from bs4 import BeautifulSoup
+from google.oauth2.credentials import Credentials
+from google.oauth2.service_account import Credentials as SACredentials
+from googleapiclient.discovery import build
 
-SHEET_NAME = "Meta Ads - Campanhas"
-SCOPES = [
+# ─── Constantes ───────────────────────────────────────────────────────────────
+
+SHEET_NAME   = "Meta Ads - Campanhas"
+GMAIL_USER   = "me"
+SHEETS_SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Nomes amigáveis para eventos padrão do Meta
-NOMES_PADRAO = {
-    "link_click": "Cliques no link",
-    "lead": "Lead",
-    "purchase": "Compra",
-    "offsite_conversion.fb_pixel_lead": "Lead (Pixel)",
-    "offsite_conversion.fb_pixel_purchase": "Compra (Pixel)",
-    "post_engagement": "Engajamento",
-    "page_like": "Curtida na Página",
-    "video_view": "Visualização de Vídeo",
-    "landing_page_view": "Visualização de Página de Destino",
-    "add_to_cart": "Adicionar ao Carrinho",
-    "initiate_checkout": "Iniciar Checkout",
-    "complete_registration": "Registro Completo",
-    "view_content": "Visualização de Conteúdo",
-    "subscribe": "Assinatura",
-}
+# Critérios de busca do e-mail (AND implícito entre os termos)
+EMAIL_QUERY = (
+    'from:advertise-noreply@support.facebook.com '
+    '"Kuna Capital Ad Account" '
+    '"Campanhas" '
+    'newer_than:3d'
+)
 
 
 # ─── Autenticação ─────────────────────────────────────────────────────────────
 
-def init_meta_api():
-    FacebookAdsApi.init(
-        os.environ["META_APP_ID"],
-        os.environ["META_APP_SECRET"],
-        os.environ["META_ACCESS_TOKEN"],
+def get_gmail_service():
+    """Cria o serviço Gmail API usando o token OAuth armazenado."""
+    raw   = base64.b64decode(os.environ["GMAIL_TOKEN_B64"])
+    data  = json.loads(raw)
+    creds = Credentials(
+        token         = data.get("token"),
+        refresh_token = data["refresh_token"],
+        token_uri     = data["token_uri"],
+        client_id     = data["client_id"],
+        client_secret = data["client_secret"],
+        scopes        = data["scopes"],
     )
-    return AdAccount(os.environ["META_AD_ACCOUNT_ID"])
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
-def init_google():
-    """Credenciais do Google a partir de base64 salvo como variável de ambiente."""
-    raw = base64.b64decode(os.environ["GOOGLE_CREDENTIALS_B64"])
-    info = json.loads(raw)
-    return Credentials.from_service_account_info(info, scopes=SCOPES)
+def get_sheets_client():
+    """Cria o cliente do Google Sheets usando a Service Account."""
+    raw   = base64.b64decode(os.environ["GOOGLE_CREDENTIALS_B64"])
+    info  = json.loads(raw)
+    creds = SACredentials.from_service_account_info(info, scopes=SHEETS_SCOPE)
+    return gspread.authorize(creds)
 
 
-# ─── Meta API ────────────────────────────────────────────────────────────────
+# ─── Gmail ────────────────────────────────────────────────────────────────────
 
-def get_custom_conversion_names(account) -> dict:
-    """Busca nomes amigáveis das conversões personalizadas da conta."""
-    try:
-        conversions = account.get_custom_conversions(fields=["name", "id"])
-        return {
-            f"offsite_conversion.custom.{c['id']}": c["name"]
-            for c in (c.export_all_data() for c in conversions)
-        }
-    except Exception as e:
-        print(f"Aviso ao buscar conversões customizadas: {e}")
-        return {}
+def find_latest_meta_email(service):
+    """Busca o e-mail mais recente do Meta com o relatório de campanhas."""
+    result   = service.users().messages().list(
+        userId=GMAIL_USER, q=EMAIL_QUERY, maxResults=1
+    ).execute()
+    messages = result.get("messages", [])
 
+    if not messages:
+        raise RuntimeError(
+            "Nenhum e-mail do Meta encontrado nos últimos 3 dias.\n"
+            f"Query usada: {EMAIL_QUERY}"
+        )
 
-def nome_amigavel(action_type: str, custom_names: dict) -> str:
-    if action_type in NOMES_PADRAO:
-        return NOMES_PADRAO[action_type]
-    if action_type in custom_names:
-        return custom_names[action_type]
-    return action_type
+    msg = service.users().messages().get(
+        userId=GMAIL_USER, id=messages[0]["id"], format="full"
+    ).execute()
+    return msg
 
 
-def get_action_value(lst: list | None, action_type: str) -> str:
-    for item in (lst or []):
-        if item.get("action_type") == action_type:
-            return item.get("value", "")
-    return ""
+def _decode_part(part: dict) -> str | None:
+    data = part.get("body", {}).get("data")
+    if data:
+        return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+    return None
 
 
-def fetch_data(since: str, until: str) -> list[dict]:
-    account = init_meta_api()
-    custom_names = get_custom_conversion_names(account)
+def extract_html_body(msg: dict) -> str:
+    """Extrai o corpo HTML do e-mail."""
+    payload = msg["payload"]
 
-    insight_fields = [
-        AdsInsights.Field.campaign_id,
-        AdsInsights.Field.campaign_name,
-        AdsInsights.Field.impressions,
-        AdsInsights.Field.reach,
-        AdsInsights.Field.clicks,
-        AdsInsights.Field.spend,
-        AdsInsights.Field.cpm,
-        AdsInsights.Field.cpc,
-        AdsInsights.Field.ctr,
-        AdsInsights.Field.frequency,
-        AdsInsights.Field.actions,
-        AdsInsights.Field.cost_per_action_type,
-        AdsInsights.Field.date_start,
-        AdsInsights.Field.date_stop,
-    ]
-    params = {
-        "level": "campaign",
-        "time_range": {"since": since, "until": until},
+    # Mensagem simples
+    if payload.get("mimeType") == "text/html":
+        return _decode_part(payload) or ""
+
+    # Mensagem multipart — procura recursivamente
+    def find_html(parts):
+        for part in parts:
+            if part.get("mimeType") == "text/html":
+                content = _decode_part(part)
+                if content:
+                    return content
+            sub = part.get("parts", [])
+            if sub:
+                result = find_html(sub)
+                if result:
+                    return result
+        return ""
+
+    return find_html(payload.get("parts", []))
+
+
+def extract_csv_url(html: str) -> str:
+    """Extrai a URL do botão 'Baixar .csv' do corpo HTML."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Procura link cujo texto contenha "csv"
+    for a in soup.find_all("a", href=True):
+        text = a.get_text(strip=True).lower()
+        if "csv" in text:
+            return a["href"]
+
+    # Fallback: qualquer href com ".csv" ou "type=csv"
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if ".csv" in href.lower() or "type=csv" in href.lower():
+            return href
+
+    raise RuntimeError("Link 'Baixar .csv' não encontrado no e-mail.")
+
+
+# ─── Download ────────────────────────────────────────────────────────────────
+
+def download_csv(url: str) -> bytes:
+    """Baixa o arquivo CSV a partir da URL do e-mail."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
     }
-    insights = account.get_insights(fields=insight_fields, params=params)
-    rows = [i.export_all_data() for i in insights]
+    resp = requests.get(url, headers=headers, timeout=60, allow_redirects=True)
+    resp.raise_for_status()
 
-    # Enriquece com campos da campanha (status, orçamento, objetivo)
-    campaigns = account.get_campaigns(fields=[
-        Campaign.Field.id,
-        Campaign.Field.status,
-        Campaign.Field.effective_status,
-        Campaign.Field.objective,
-        Campaign.Field.daily_budget,
-        Campaign.Field.lifetime_budget,
-    ])
-    camp_meta = {c["id"]: c.export_all_data() for c in campaigns}
+    content_type = resp.headers.get("content-type", "")
+    if "text/html" in content_type:
+        raise RuntimeError(
+            "O link de download expirou ou requer autenticação. "
+            "Verifique se o e-mail tem menos de 3 dias."
+        )
 
-    for row in rows:
-        m = camp_meta.get(row.get("campaign_id"), {})
-        row["status"] = m.get("status", "")
-        row["effective_status"] = m.get("effective_status", "")
-        row["objective"] = m.get("objective", "")
-        daily = m.get("daily_budget", "")
-        lifetime = m.get("lifetime_budget", "")
-        row["budget"] = daily if daily else lifetime
-        row["budget_type"] = "Diário" if daily else "Vitalício"
-        row["_custom_names"] = custom_names
-
-    return rows
+    return resp.content
 
 
-# ─── Montar planilha ──────────────────────────────────────────────────────────
-
-def build_rows(rows: list[dict]) -> list[list]:
-    if not rows:
-        return []
-
-    custom_names = rows[0].get("_custom_names", {})
-
-    # Coleta todos os tipos de ação na ordem em que aparecem
-    action_types, seen = [], set()
-    for row in rows:
-        for a in (row.get("actions") or []):
-            at = a["action_type"]
-            if at not in seen:
-                action_types.append(at)
-                seen.add(at)
-
-    cabecalho = [
-        "Campanha", "ID Campanha", "Veiculação", "Objetivo",
-        "Orçamento", "Tipo Orçamento", "Valor Usado",
-        "Impressões", "Alcance", "Frequência",
-        "Cliques", "CTR (%)", "CPM", "CPC",
-        "Data Início", "Data Fim",
-    ]
-    # Colunas de Resultados com nomes amigáveis (igual ao Meta Ads Manager)
-    cabecalho += [f"Resultado: {nome_amigavel(at, custom_names)}" for at in action_types]
-    cabecalho += [f"Custo por: {nome_amigavel(at, custom_names)}" for at in action_types]
-
-    data = [cabecalho]
-    for row in rows:
-        actions = row.get("actions") or []
-        cost_per = row.get("cost_per_action_type") or []
-
-        linha = [
-            row.get("campaign_name", ""),
-            row.get("campaign_id", ""),
-            row.get("effective_status", row.get("status", "")),
-            row.get("objective", ""),
-            row.get("budget", ""),
-            row.get("budget_type", ""),
-            row.get("spend", ""),
-            row.get("impressions", ""),
-            row.get("reach", ""),
-            row.get("frequency", ""),
-            row.get("clicks", ""),
-            row.get("ctr", ""),
-            row.get("cpm", ""),
-            row.get("cpc", ""),
-            row.get("date_start", ""),
-            row.get("date_stop", ""),
-        ]
-        for at in action_types:
-            linha.append(get_action_value(actions, at))
-        for at in action_types:
-            linha.append(get_action_value(cost_per, at))
-
-        data.append(linha)
-
-    return data
+def parse_csv(content: bytes) -> list[list[str]]:
+    """Converte o conteúdo CSV em lista de listas para o Sheets."""
+    # Tenta detectar encoding (Meta usa UTF-8 com BOM ou latin-1)
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            text   = content.decode(encoding)
+            reader = csv.reader(io.StringIO(text))
+            rows   = list(reader)
+            if rows:
+                return rows
+        except Exception:
+            continue
+    raise RuntimeError("Não foi possível decodificar o CSV.")
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
 
-def write_to_sheets(data: list[list], creds) -> str:
-    client = gspread.authorize(creds)
+def write_to_sheets(rows: list[list[str]], client) -> str:
+    """Escreve os dados na planilha, sobrescrevendo o conteúdo anterior."""
     spreadsheet = client.open(SHEET_NAME)
 
     try:
         sheet = spreadsheet.worksheet("Campanhas")
         sheet.clear()
     except gspread.exceptions.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title="Campanhas", rows=5000, cols=150)
+        sheet = spreadsheet.add_worksheet(title="Campanhas", rows=10000, cols=100)
 
-    sheet.update(data)
+    sheet.update(rows)
     sheet.format("1:1", {"textFormat": {"bold": True}})
 
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet.id}"
@@ -224,20 +196,34 @@ def write_to_sheets(data: list[list], creds) -> str:
 
 @functions_framework.http
 def run(request):
-    today = date.today()
-    since = today.replace(day=1).strftime("%Y-%m-%d")
-    until = today.strftime("%Y-%m-%d")
+    try:
+        print("Iniciando Plano C: Gmail → CSV → Google Sheets")
 
-    print(f"Período: {since} → {until}")
-    rows = fetch_data(since, until)
+        gmail   = get_gmail_service()
+        sheets  = get_sheets_client()
 
-    if not rows:
-        return "Nenhum dado encontrado.", 200
+        print("Buscando e-mail do Meta...")
+        msg     = find_latest_meta_email(gmail)
 
-    data = build_rows(rows)
-    google_creds = init_google()
-    url = write_to_sheets(data, google_creds)
+        subject = next(
+            (h["value"] for h in msg["payload"]["headers"] if h["name"] == "Subject"),
+            "(sem assunto)"
+        )
+        print(f"E-mail encontrado: {subject}")
 
-    msg = f"OK — {len(rows)} campanhas enviadas para o Sheets. {url}"
-    print(msg)
-    return msg, 200
+        html    = extract_html_body(msg)
+        url     = extract_csv_url(html)
+        print(f"Link CSV extraído: {url[:80]}...")
+
+        content = download_csv(url)
+        rows    = parse_csv(content)
+        print(f"CSV baixado: {len(rows)-1} linhas de dados.")
+
+        sheet_url = write_to_sheets(rows, sheets)
+        msg_ok    = f"OK — {len(rows)-1} linhas enviadas para o Sheets. {sheet_url}"
+        print(msg_ok)
+        return msg_ok, 200
+
+    except Exception as e:
+        print(f"ERRO: {e}")
+        return f"Erro: {e}", 500
