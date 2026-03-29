@@ -42,7 +42,7 @@ def encode_credentials(path: str) -> str:
 
 def run(cmd: list, check=True):
     print(f"\n$ {' '.join(cmd)}")
-    result = subprocess.run(cmd, check=check, capture_output=False)
+    result = subprocess.run(cmd, check=check, capture_output=False, shell=True)
     return result
 
 
