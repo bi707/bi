@@ -131,20 +131,48 @@ def run():
         except Exception as e:
             print(f"Aviso ao ajustar data: {e}")
 
-        # Clica no botão Exportar
+        # Clica no botão Exportar (seta para baixo no canto direito da barra de ferramentas)
         print("Clicando em Exportar...")
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(3000)
 
         export_clicked = False
-        for label in ["Exportar", "Export"]:
-            try:
-                btn = page.locator(f"[aria-label='{label}']").first
-                if btn.is_visible(timeout=4000):
-                    btn.click()
-                    export_clicked = True
-                    break
-            except Exception:
-                pass
+
+        # Usa JavaScript para encontrar o botão que abre o menu de exportação
+        # O menu contém "Exportar como .csv", então procuramos o botão que abre esse menu
+        export_clicked = page.evaluate("""
+            () => {
+                // Tenta encontrar por aria-label
+                const labels = ['Exportar', 'Export', 'Exportar tabela', 'Export table'];
+                for (const label of labels) {
+                    const el = document.querySelector(`[aria-label="${label}"]`);
+                    if (el) { el.click(); return true; }
+                }
+
+                // Procura todos os botões/divs clicáveis com role=button na barra de ferramentas
+                const buttons = Array.from(document.querySelectorAll('[role="button"]'));
+
+                // Filtra os botões visíveis que têm seta para baixo (chevron)
+                // e estão no lado direito da página (x > 800px)
+                const rightButtons = buttons.filter(b => {
+                    const rect = b.getBoundingClientRect();
+                    return rect.x > 800 && rect.y > 280 && rect.y < 380 && rect.width < 60;
+                });
+
+                // Clica no segundo botão de seta para baixo (conforme instrução do usuário)
+                if (rightButtons.length >= 2) {
+                    rightButtons[1].click();
+                    return true;
+                } else if (rightButtons.length === 1) {
+                    rightButtons[0].click();
+                    return true;
+                }
+                return false;
+            }
+        """)
+
+        if export_clicked:
+            print("  Botão de exportar clicado via JavaScript.")
+
 
         if not export_clicked:
             print("Botão exportar não encontrado. Salvando screenshot em reports/debug.png ...")
