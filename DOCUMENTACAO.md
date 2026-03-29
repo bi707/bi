@@ -158,6 +158,65 @@ git pull
 
 ---
 
-## Próximo passo planejado
+---
 
-**Etapa B:** Substituir o scraping pelo navegador pela **API oficial do Meta**, com execução na **nuvem** (sem depender do computador ligado e sem risco de bloqueio).
+## Etapa B — API Oficial + Nuvem (Google Cloud)
+
+Substitui o scraping pelo navegador pela **API oficial do Meta**, rodando na **nuvem**.
+
+### Vantagens sobre a Etapa A
+
+| | Etapa A (scraping) | Etapa B (API + nuvem) |
+|---|---|---|
+| Computador precisa estar ligado | Sim | **Não** |
+| Risco de bloqueio pelo Meta | Sim | **Nenhum** |
+| Login manual periódico | Sim (a cada 30-90 dias) | **Não** |
+| Coluna "Resultados" com nome amigável | Não | **Sim** |
+
+### Arquivos da Etapa B
+
+```
+cloud/
+├── main.py          ← Código da Cloud Function
+└── requirements.txt ← Dependências da Cloud Function
+
+deploy_cloud.py      ← Script de deploy (roda uma vez só)
+```
+
+### Como funciona na nuvem
+
+```
+Cloud Scheduler (8h e 20h)
+    → Cloud Function (meta-ads-sheets)
+        → API do Meta → busca campanhas do mês atual
+        → Google Sheets → atualiza a planilha
+```
+
+### Como fazer o deploy
+
+**1.** Instale o Google Cloud SDK:
+Acesse **cloud.google.com/sdk/docs/install** e instale o **Google Cloud CLI**
+
+**2.** Abra o Prompt de Comando e faça login:
+```
+gcloud auth login
+```
+
+**3.** Rode o script de deploy (faz tudo automaticamente):
+```
+cd C:\Users\Vanessa\bi
+python deploy_cloud.py
+```
+
+O script vai:
+- Habilitar as APIs necessárias no Google Cloud
+- Fazer o deploy da Cloud Function
+- Configurar o agendamento automático (8h e 20h, horário de Brasília)
+
+### Coluna "Resultados" na Etapa B
+
+A Etapa B busca automaticamente os **nomes reais das conversões personalizadas** da conta (ex: "Approved Profiling", "Completed Profiling") diretamente da API do Meta, gerando colunas com os mesmos nomes que aparecem no Gerenciador de Anúncios.
+
+### Etapa A ainda funciona?
+
+**Sim.** Os scripts `scrape_campaigns.py`, `upload_sheets.py` e `run.bat` continuam intactos. A Etapa B é um complemento — ambas escrevem na mesma planilha **Meta Ads - Campanhas**.
