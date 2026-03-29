@@ -2,13 +2,14 @@
 Exporta o relatório de campanhas do Meta Ads Manager
 clicando no botão "Exportar como .csv" via automação de navegador.
 
+Na primeira execução: faça o login manualmente no navegador que abrir.
+Nas próximas execuções: a sessão fica salva e o login é automático.
+
 Uso:
     python scrape_campaigns.py
 """
 
 import os
-import shutil
-import time
 from datetime import date
 from pathlib import Path
 
@@ -17,10 +18,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 load_dotenv()
 
-EMAIL = os.environ["META_FB_EMAIL"]
-PASSWORD = os.environ["META_FB_PASSWORD"]
 AD_ACCOUNT_ID = os.environ["META_AD_ACCOUNT_ID"].replace("act_", "")
-
 ADS_MANAGER_URL = (
     f"https://adsmanager.facebook.com/adsmanager/manage/campaigns?act={AD_ACCOUNT_ID}"
 )
@@ -28,107 +26,120 @@ ADS_MANAGER_URL = (
 OUTPUT_DIR = Path("reports")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+SESSION_FILE = Path("session.json")
+
+
+def esta_logado(page) -> bool:
+    try:
+        page.wait_for_selector("[aria-label='Sua conta']", timeout=5000)
+        return True
+    except Exception:
+        pass
+    try:
+        page.wait_for_selector("[data-testid='ads-manager-campaigns-table']", timeout=5000)
+        return True
+    except Exception:
+        pass
+    return "adsmanager.facebook.com" in page.url or (
+        "facebook.com" in page.url and "login" not in page.url
+    )
+
 
 def run():
     today = date.today()
-    since = today.replace(day=1).strftime("%d/%m/%Y")
-    until = today.strftime("%d/%m/%Y")
     filename = OUTPUT_DIR / f"campanhas_{today.replace(day=1).strftime('%Y-%m-%d')}_{today.strftime('%Y-%m-%d')}.csv"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=500)
-        context = browser.new_context(accept_downloads=True)
+        # Usa sessão salva se existir
+        launch_args = dict(headless=False, slow_mo=300)
+        browser = p.chromium.launch(**launch_args)
+
+        ctx_args = dict(accept_downloads=True)
+        if SESSION_FILE.exists():
+            ctx_args["storage_state"] = str(SESSION_FILE)
+
+        context = browser.new_context(**ctx_args)
         page = context.new_page()
 
-        # 1. Login no Facebook
-        print("Abrindo Facebook...")
-        page.goto("https://www.facebook.com/login", wait_until="networkidle")
+        # Tenta ir direto para o Ads Manager
+        print("Abrindo Meta Ads Manager...")
+        page.goto(ADS_MANAGER_URL, wait_until="domcontentloaded", timeout=30_000)
+        page.wait_for_timeout(4000)
 
-        # Tenta diferentes seletores para o campo de e-mail
-        email_selectors = ["#email", "input[name='email']", "input[type='email']"]
-        for sel in email_selectors:
+        # Se caiu na tela de login, aguarda o usuário logar manualmente
+        if "login" in page.url or "facebook.com/login" in page.url:
+            print("\n" + "="*55)
+            print("AÇÃO NECESSÁRIA: faça o login no navegador que abriu.")
+            print("Após entrar, aguarde — o script continua sozinho.")
+            print("="*55 + "\n")
+
+            # Aguarda até estar no Ads Manager (até 3 minutos)
             try:
-                page.wait_for_selector(sel, timeout=10_000)
-                page.fill(sel, EMAIL)
-                break
+                page.wait_for_url(f"**{AD_ACCOUNT_ID}**", timeout=180_000)
             except PlaywrightTimeout:
-                continue
+                try:
+                    page.wait_for_url("**/adsmanager/**", timeout=60_000)
+                except PlaywrightTimeout:
+                    pass
+            page.wait_for_timeout(5000)
 
-        pass_selectors = ["#pass", "input[name='pass']", "input[type='password']"]
-        for sel in pass_selectors:
-            try:
-                page.fill(sel, PASSWORD)
-                break
-            except Exception:
-                continue
+        # Salva sessão para próximas execuções
+        context.storage_state(path=str(SESSION_FILE))
+        print("Sessão salva.")
 
-        login_selectors = ["[name='login']", "button[type='submit']", "#loginbutton"]
-        for sel in login_selectors:
-            try:
-                page.click(sel)
-                break
-            except Exception:
-                continue
-
-        # Aguarda possível 2FA ou checkpoint
-        print("Aguardando login... (complete qualquer verificação se solicitado)")
-        try:
-            page.wait_for_url("**/facebook.com/**", timeout=60_000)
-        except PlaywrightTimeout:
-            pass
-        page.wait_for_timeout(3000)
-
-        # 2. Navega para o Ads Manager
-        print("Abrindo Ads Manager...")
-        page.goto(ADS_MANAGER_URL, wait_until="domcontentloaded")
-        page.wait_for_timeout(5000)
-
-        # 3. Fecha popups se existirem
-        for selector in ["[aria-label='Fechar']", "[aria-label='Close']"]:
+        # Fecha popups
+        for selector in ["[aria-label='Fechar']", "[aria-label='Close']", "[data-testid='dialog-close-button']"]:
             try:
                 btn = page.locator(selector).first
-                if btn.is_visible(timeout=2000):
+                if btn.is_visible(timeout=1500):
                     btn.click()
+                    page.wait_for_timeout(500)
             except Exception:
                 pass
 
-        # 4. Ajusta o período para o mês atual
-        print(f"Ajustando período: {since} → {until} ...")
+        # Ajusta período para "Este mês"
+        print("Ajustando período para o mês atual...")
         try:
-            # Clica no seletor de datas
-            date_btn = page.locator("text=Últimos 30 dias").first
-            if not date_btn.is_visible(timeout=3000):
-                date_btn = page.locator("[data-testid='date-selector']").first
-            date_btn.click()
-            page.wait_for_timeout(1000)
+            for label in ["Últimos 30 dias", "Last 30 days", "Ontem", "Yesterday", "Hoje", "Today"]:
+                try:
+                    btn = page.locator(f"text='{label}'").first
+                    if btn.is_visible(timeout=2000):
+                        btn.click()
+                        break
+                except Exception:
+                    pass
 
-            # Seleciona "Este mês"
             for label in ["Este mês", "This month"]:
-                opt = page.locator(f"text={label}").first
-                if opt.is_visible(timeout=2000):
-                    opt.click()
-                    break
-            page.wait_for_timeout(2000)
+                try:
+                    opt = page.locator(f"text='{label}'").first
+                    if opt.is_visible(timeout=2000):
+                        opt.click()
+                        break
+                except Exception:
+                    pass
 
-            # Confirma
             for label in ["Atualizar", "Update", "Aplicar", "Apply"]:
-                btn = page.locator(f"text={label}").first
-                if btn.is_visible(timeout=2000):
-                    btn.click()
-                    break
+                try:
+                    btn = page.locator(f"text='{label}'").first
+                    if btn.is_visible(timeout=2000):
+                        btn.click()
+                        break
+                except Exception:
+                    pass
+
             page.wait_for_timeout(3000)
         except Exception as e:
-            print(f"Aviso: não foi possível ajustar a data automaticamente ({e}). Continuando...")
+            print(f"Aviso ao ajustar data: {e}")
 
-        # 5. Clica no botão de exportar
+        # Clica no botão Exportar
         print("Clicando em Exportar...")
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2000)
 
         export_clicked = False
         for label in ["Exportar", "Export"]:
             try:
                 btn = page.locator(f"[aria-label='{label}']").first
-                if btn.is_visible(timeout=3000):
+                if btn.is_visible(timeout=4000):
                     btn.click()
                     export_clicked = True
                     break
@@ -136,35 +147,32 @@ def run():
                 pass
 
         if not export_clicked:
-            # Tenta pelo ícone de download na barra de ferramentas
-            try:
-                page.locator("[data-testid='export-button']").click()
-                export_clicked = True
-            except Exception:
-                pass
-
-        if not export_clicked:
-            print("Botão de exportar não encontrado. Tirando screenshot para diagnóstico...")
-            page.screenshot(path="reports/debug.png")
+            print("Botão exportar não encontrado. Salvando screenshot em reports/debug.png ...")
+            page.screenshot(path="reports/debug.png", full_page=True)
             browser.close()
+            print("Abra reports/debug.png e me envie para diagnóstico.")
             return
 
         page.wait_for_timeout(1500)
 
-        # 6. Clica em "Exportar como .csv"
+        # Clica em "Exportar como .csv"
         print("Selecionando 'Exportar como .csv'...")
-        for label in ["Exportar como .csv", "Export as .csv", "Exportar como CSV"]:
+        for label in ["Exportar como .csv", "Export as .csv", "Exportar como CSV", "Export as CSV"]:
             try:
-                opt = page.locator(f"text={label}").first
+                opt = page.locator(f"text='{label}'").first
                 if opt.is_visible(timeout=3000):
-                    with page.expect_download(timeout=30_000) as dl:
+                    with page.expect_download(timeout=60_000) as dl:
                         opt.click()
                     download = dl.value
-                    download.save_as(filename)
-                    print(f"\nRelatório exportado: {filename}")
+                    download.save_as(str(filename))
+                    print(f"\nRelatório exportado com sucesso: {filename}")
                     break
             except Exception:
                 continue
+        else:
+            print("Opção 'Exportar como .csv' não encontrada. Salvando screenshot...")
+            page.screenshot(path="reports/debug.png", full_page=True)
+            print("Abra reports/debug.png e me envie para diagnóstico.")
 
         browser.close()
 
