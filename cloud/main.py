@@ -137,23 +137,38 @@ def extract_csv_url(html: str) -> str:
 
 # ─── Download ────────────────────────────────────────────────────────────────
 
+def get_fb_cookies() -> dict:
+    """Extrai cookies do Facebook a partir da sessão salva pelo Playwright."""
+    raw     = base64.b64decode(os.environ["FB_SESSION_B64"])
+    session = json.loads(raw)
+    return {
+        c["name"]: c["value"]
+        for c in session.get("cookies", [])
+        if "facebook.com" in c.get("domain", "")
+    }
+
+
 def download_csv(url: str) -> bytes:
-    """Baixa o arquivo CSV a partir da URL do e-mail."""
+    """Baixa o CSV usando os cookies de sessão do Facebook."""
+    cookies = get_fb_cookies()
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
-        )
+        ),
+        "Referer": "https://www.facebook.com/",
     }
-    resp = requests.get(url, headers=headers, timeout=60, allow_redirects=True)
+    resp = requests.get(url, headers=headers, cookies=cookies,
+                        timeout=60, allow_redirects=True)
     resp.raise_for_status()
 
     content_type = resp.headers.get("content-type", "")
     if "text/html" in content_type:
         raise RuntimeError(
-            "O link de download expirou ou requer autenticação. "
-            "Verifique se o e-mail tem menos de 3 dias."
+            "Sessão do Facebook expirou. "
+            "Rode scrape_campaigns.py no seu computador para renovar o session.json, "
+            "depois rode deploy_cloud.py novamente."
         )
 
     return resp.content

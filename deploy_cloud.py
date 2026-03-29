@@ -21,7 +21,7 @@ REGION         = "us-central1"
 FUNCTION_NAME  = "meta-ads-sheets"
 FUNCTION_URL   = "https://meta-ads-sheets-zjeanpzfeq-uc.a.run.app"
 
-REQUIRED_FILES = ["credentials.json", "gmail_token.json", ".env"]
+REQUIRED_FILES = ["credentials.json", "gmail_token.json", "session.json", ".env"]
 
 
 def load_env(path: str) -> dict:
@@ -60,10 +60,12 @@ def main():
     env           = load_env(".env")
     creds_b64     = encode_file("credentials.json")
     gmail_b64     = encode_file("gmail_token.json")
+    session_b64   = encode_file("session.json")
 
     env_vars = ",".join([
         f"GOOGLE_CREDENTIALS_B64={creds_b64}",
         f"GMAIL_TOKEN_B64={gmail_b64}",
+        f"FB_SESSION_B64={session_b64}",
         f"META_APP_ID={env['META_APP_ID']}",
         f"META_APP_SECRET={env['META_APP_SECRET']}",
         f"META_ACCESS_TOKEN={env['META_ACCESS_TOKEN']}",
