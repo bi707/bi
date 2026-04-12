@@ -151,6 +151,10 @@ def get_fb_cookies() -> dict:
 def download_csv(url: str) -> bytes:
     """Baixa o CSV usando os cookies de sessão do Facebook."""
     cookies = get_fb_cookies()
+
+    # Diagnóstico: quais cookies estão sendo enviadas
+    print(f"Cookies FB enviadas ({len(cookies)}): {list(cookies.keys())}")
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -158,19 +162,26 @@ def download_csv(url: str) -> bytes:
             "Chrome/120.0.0.0 Safari/537.36"
         ),
         "Referer": "https://www.facebook.com/",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
     }
     resp = requests.get(url, headers=headers, cookies=cookies,
                         timeout=60, allow_redirects=True)
-    resp.raise_for_status()
 
-    content_type = resp.headers.get("content-type", "")
+    # Diagnóstico: o que o Facebook retornou
+    content_type = resp.headers.get("content-type", "N/A")
+    print(f"HTTP {resp.status_code} | Content-Type: {content_type}")
+    print(f"URL final (após redirects): {resp.url}")
+    if resp.status_code != 200 or "text/html" in content_type:
+        print(f"Resposta (primeiros 500 chars): {resp.text[:500]}")
+
     if "text/html" in content_type:
         raise RuntimeError(
-            "Sessão do Facebook expirou. "
-            "Rode scrape_campaigns.py no seu computador para renovar o session.json, "
-            "depois rode deploy_cloud.py novamente."
+            "Facebook retornou HTML (sessão expirada ou bloqueio de IP). "
+            "Renove session.json rodando scrape_campaigns.py e execute deploy_cloud.py."
         )
 
+    resp.raise_for_status()
     return resp.content
 
 
