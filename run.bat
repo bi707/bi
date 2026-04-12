@@ -1,3 +1,4 @@
 @echo off
 cd /d C:\Users\Vanessa\bi
-python run_planc_local.py
+python scrape_campaigns.py
+python upload_sheets.py
