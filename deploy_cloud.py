@@ -11,15 +11,16 @@ Uso:
 """
 
 import base64
-import json
 import subprocess
 import sys
+import yaml
 from pathlib import Path
 
 PROJECT_ID     = "analytics-contas"
 REGION         = "us-central1"
 FUNCTION_NAME  = "meta-ads-sheets"
 FUNCTION_URL   = "https://meta-ads-sheets-zjeanpzfeq-uc.a.run.app"
+ENV_YAML_PATH  = ".env.yaml"
 
 REQUIRED_FILES = ["credentials.json", "gmail_token.json", "session.json", ".env"]
 
@@ -62,15 +63,20 @@ def main():
     gmail_b64     = encode_file("gmail_token.json")
     session_b64   = encode_file("session.json")
 
-    env_vars = ",".join([
-        f"GOOGLE_CREDENTIALS_B64={creds_b64}",
-        f"GMAIL_TOKEN_B64={gmail_b64}",
-        f"FB_SESSION_B64={session_b64}",
-        f"META_APP_ID={env['META_APP_ID']}",
-        f"META_APP_SECRET={env['META_APP_SECRET']}",
-        f"META_ACCESS_TOKEN={env['META_ACCESS_TOKEN']}",
-        f"META_AD_ACCOUNT_ID={env['META_AD_ACCOUNT_ID']}",
-    ])
+    # Grava variáveis de ambiente em arquivo YAML para evitar o limite de
+    # comprimento do comando no Windows (WinError 206).
+    env_dict = {
+        "GOOGLE_CREDENTIALS_B64": creds_b64,
+        "GMAIL_TOKEN_B64":        gmail_b64,
+        "FB_SESSION_B64":         session_b64,
+        "META_APP_ID":            env["META_APP_ID"],
+        "META_APP_SECRET":        env["META_APP_SECRET"],
+        "META_ACCESS_TOKEN":      env["META_ACCESS_TOKEN"],
+        "META_AD_ACCOUNT_ID":     env["META_AD_ACCOUNT_ID"],
+    }
+    with open(ENV_YAML_PATH, "w") as f:
+        yaml.dump(env_dict, f, default_flow_style=False, allow_unicode=True)
+    print(f"Variáveis de ambiente salvas em {ENV_YAML_PATH}")
 
     run(["gcloud", "config", "set", "project", PROJECT_ID])
 
@@ -94,7 +100,7 @@ def main():
         "--allow-unauthenticated",
         "--timeout=300s",
         "--memory=512MB",
-        f"--set-env-vars={env_vars}",
+        f"--env-vars-file={ENV_YAML_PATH}",
     ])
 
     print(f"\nCloud Function: {FUNCTION_URL}")
