@@ -11,6 +11,7 @@ Uso:
 """
 
 import base64
+import json
 import os
 import subprocess
 import sys
@@ -26,14 +27,6 @@ ENV_YAML_PATH = ".env.yaml"
 
 REQUIRED_FILES = ["credentials.json", "gmail_token.json", "session.json", ".env"]
 
-# Credenciais grandes → Secret Manager (evita limite de 32 KB por env var)
-# env_var_name: (arquivo_fonte, nome_do_secret)
-LARGE_SECRETS = {
-    "GOOGLE_CREDENTIALS_B64": ("credentials.json", "meta-ads-google-credentials"),
-    "GMAIL_TOKEN_B64":        ("gmail_token.json",  "meta-ads-gmail-token"),
-    "FB_SESSION_B64":         ("session.json",      "meta-ads-fb-session"),
-}
-
 
 def load_env(path: str) -> dict:
     env = {}
@@ -47,8 +40,37 @@ def load_env(path: str) -> dict:
 
 
 def encode_file(path: str) -> str:
+    """Lê um arquivo e retorna em base64."""
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
+
+
+def encode_fb_session(path: str) -> str:
+    """
+    Extrai APENAS as cookies do facebook.com do session.json do Playwright.
+    O arquivo original tem ~100KB; as cookies do FB têm ~2-3KB.
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        session = json.load(f)
+
+    fb_cookies = [
+        c for c in session.get("cookies", [])
+        if "facebook.com" in c.get("domain", "")
+    ]
+    filtered = {"cookies": fb_cookies}
+    raw = json.dumps(filtered).encode("utf-8")
+
+    print(f"    session.json completo: {Path(path).stat().st_size // 1024} KB")
+    print(f"    Cookies FB extraídas:  {len(fb_cookies)} cookies, "
+          f"{len(raw) // 1024} KB")
+
+    if not fb_cookies:
+        raise RuntimeError(
+            "Nenhuma cookie do Facebook encontrada no session.json.\n"
+            "Rode scrape_campaigns.py para fazer login e gerar uma sessão válida."
+        )
+
+    return base64.b64encode(raw).decode()
 
 
 def run(cmd: list, check=True):
@@ -66,8 +88,7 @@ def get_project_number() -> str:
 
 
 def upsert_secret(secret_id: str, b64_value: str):
-    """Cria ou atualiza um secret no Secret Manager com o valor base64."""
-    # Verifica se o secret já existe
+    """Cria ou atualiza um secret no Secret Manager."""
     exists = subprocess.run(
         ["gcloud", "secrets", "describe", secret_id,
          f"--project={PROJECT_ID}"],
@@ -78,8 +99,8 @@ def upsert_secret(secret_id: str, b64_value: str):
              f"--project={PROJECT_ID}",
              "--replication-policy=automatic"])
 
-    # Grava valor em arquivo temporário e envia como nova versão
-    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".b64") as tmp:
+    with tempfile.NamedTemporaryFile(mode="w", delete=False,
+                                     suffix=".b64", encoding="utf-8") as tmp:
         tmp.write(b64_value)
         tmp_path = tmp.name
     try:
@@ -91,7 +112,7 @@ def upsert_secret(secret_id: str, b64_value: str):
 
 
 def main():
-    # Verifica arquivos necessários
+    # 1. Verifica arquivos necessários
     missing = [f for f in REQUIRED_FILES if not Path(f).exists()]
     if missing:
         for f in missing:
@@ -104,8 +125,10 @@ def main():
 
     env = load_env(".env")
 
+    # 2. Configura projeto
     run(["gcloud", "config", "set", "project", PROJECT_ID])
 
+    # 3. Habilita APIs
     print("\nHabilitando APIs necessárias...")
     run(["gcloud", "services", "enable",
          "cloudfunctions.googleapis.com",
@@ -115,31 +138,44 @@ def main():
          "gmail.googleapis.com",
          "secretmanager.googleapis.com"])
 
-    # Envia as 3 credenciais grandes para o Secret Manager
-    print("\nEnviando credenciais para o Secret Manager...")
-    for env_var, (src_file, secret_id) in LARGE_SECRETS.items():
-        print(f"  {src_file} → secret '{secret_id}'")
-        b64 = encode_file(src_file)
-        upsert_secret(secret_id, b64)
+    # 4. Codifica credenciais
+    print("\nPreparando credenciais...")
+    creds_b64  = encode_file("credentials.json")
+    gmail_b64  = encode_file("gmail_token.json")
 
-    # Obtém o número do projeto para construir o email da service account
+    print("  Filtrando cookies do Facebook do session.json...")
+    session_b64 = encode_fb_session("session.json")
+
+    # 5. Envia para o Secret Manager
+    secrets_to_upload = [
+        ("meta-ads-google-credentials", creds_b64,   "credentials.json"),
+        ("meta-ads-gmail-token",         gmail_b64,   "gmail_token.json"),
+        ("meta-ads-fb-session",          session_b64, "session.json (só cookies FB)"),
+    ]
+
+    print("\nEnviando credenciais para o Secret Manager...")
+    for secret_id, b64_value, label in secrets_to_upload:
+        size_kb = len(b64_value) // 1024
+        print(f"  {label} → '{secret_id}' ({size_kb} KB)")
+        upsert_secret(secret_id, b64_value)
+
+    # 6. Descobre service account e concede acesso aos secrets
     print("\nObtendo número do projeto...")
     project_number = get_project_number()
     sa_email = f"{project_number}-compute@developer.gserviceaccount.com"
     print(f"  Service account: {sa_email}")
 
-    # Concede acesso de leitura aos secrets para a service account da função
     print("\nConcedendo acesso de leitura aos secrets...")
-    for _, (_, secret_id) in LARGE_SECRETS.items():
+    for secret_id, _, _ in secrets_to_upload:
         subprocess.run(
             ["gcloud", "secrets", "add-iam-policy-binding", secret_id,
              f"--project={PROJECT_ID}",
              f"--member=serviceAccount:{sa_email}",
              "--role=roles/secretmanager.secretAccessor"],
-            shell=True, check=False,  # check=False: pode já estar concedido
+            shell=True, check=False,
         )
 
-    # Variáveis pequenas vão para .env.yaml (sem limite de tamanho)
+    # 7. Variáveis pequenas → .env.yaml
     small_env = {
         "META_APP_ID":        env["META_APP_ID"],
         "META_APP_SECRET":    env["META_APP_SECRET"],
@@ -150,11 +186,12 @@ def main():
         yaml.dump(small_env, f, default_flow_style=False, allow_unicode=True)
     print(f"\nVariáveis pequenas salvas em {ENV_YAML_PATH}")
 
-    # --set-secrets mapeia env var → secret:versão (apenas os nomes, sem o valor)
-    set_secrets = ",".join(
-        f"{env_var}={secret_id}:latest"
-        for env_var, (_, secret_id) in LARGE_SECRETS.items()
-    )
+    # 8. Deploy da função com --set-secrets (referencia pelo nome, não pelo valor)
+    set_secrets = ",".join([
+        "GOOGLE_CREDENTIALS_B64=meta-ads-google-credentials:latest",
+        "GMAIL_TOKEN_B64=meta-ads-gmail-token:latest",
+        "FB_SESSION_B64=meta-ads-fb-session:latest",
+    ])
 
     print("\nFazendo deploy da Cloud Function...")
     run([
@@ -174,7 +211,7 @@ def main():
 
     print(f"\nCloud Function: {FUNCTION_URL}")
 
-    # Cloud Scheduler — 8h (Brasília)
+    # 9. Cloud Scheduler — 8h (Brasília)
     print("\nConfigurando agendamento às 8h (Brasília)...")
     run([
         "gcloud", "scheduler", "jobs", "create", "http", f"{FUNCTION_NAME}-8h",
