@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 
 import gspread
-import requests
 from bs4 import BeautifulSoup
 from google.oauth2.credentials import Credentials
 from google.oauth2.service_account import Credentials as SACredentials
@@ -132,51 +131,51 @@ def extract_csv_url(html: str) -> str:
 
 # ─── Download ─────────────────────────────────────────────────────────────────
 
-def get_fb_cookies() -> dict:
+def download_csv(url: str) -> bytes:
+    """
+    Baixa o CSV usando Playwright (browser real com sessão salva).
+    requests.get() é rejeitado pelo Facebook por TLS fingerprinting;
+    o Playwright usa um Chromium real que passa pela verificação.
+    """
+    import tempfile
+    import os
+    from playwright.sync_api import sync_playwright
+
     session_path = BASE_DIR / "session.json"
     if not session_path.exists():
         print("ERRO: session.json não encontrado. Rode scrape_campaigns.py para fazer login.")
         sys.exit(1)
 
-    with open(session_path, "r", encoding="utf-8") as f:
-        session = json.load(f)
+    tmp_dir = tempfile.mkdtemp()
+    csv_path = None
 
-    cookies = {
-        c["name"]: c["value"]
-        for c in session.get("cookies", [])
-        if "facebook.com" in c.get("domain", "")
-    }
-    print(f"  Cookies FB: {list(cookies.keys())}")
-    return cookies
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(storage_state=str(session_path))
+        page    = context.new_page()
 
+        print("  Abrindo link no browser (headless)...")
+        with page.expect_download(timeout=60_000) as dl_info:
+            try:
+                page.goto(url, timeout=20_000)
+            except Exception:
+                # goto pode levantar timeout/navigation ao iniciar download
+                pass
 
-def download_csv(url: str) -> bytes:
-    cookies = get_fb_cookies()
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://www.facebook.com/",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pt-BR,pt;q=0.9",
-    }
-    resp = requests.get(url, headers=headers, cookies=cookies,
-                        timeout=60, allow_redirects=True)
+        download = dl_info.value
+        filename = download.suggested_filename or "report.csv"
+        csv_path = os.path.join(tmp_dir, filename)
+        download.save_as(csv_path)
+        print(f"  Download concluído: {filename}")
 
-    content_type = resp.headers.get("content-type", "")
-    print(f"  HTTP {resp.status_code} | Content-Type: {content_type}")
+        browser.close()
 
-    if "text/html" in content_type or resp.status_code != 200:
-        print(f"  Resposta: {resp.text[:300]}")
-        raise RuntimeError(
-            f"Falha no download (HTTP {resp.status_code}). "
-            "Se aparecer página de erro do Facebook, renove o session.json "
-            "rodando scrape_campaigns.py para fazer login novamente."
-        )
+    with open(csv_path, "rb") as f:
+        content = f.read()
 
-    return resp.content
+    os.unlink(csv_path)
+    os.rmdir(tmp_dir)
+    return content
 
 
 def parse_csv(content: bytes) -> list[list]:
