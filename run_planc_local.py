@@ -155,12 +155,22 @@ def download_csv(url: str) -> bytes:
         page    = context.new_page()
 
         print("  Abrindo link no browser (headless)...")
-        with page.expect_download(timeout=60_000) as dl_info:
-            try:
-                page.goto(url, timeout=20_000)
-            except Exception:
-                # goto pode levantar timeout/navigation ao iniciar download
-                pass
+        try:
+            with page.expect_download(timeout=60_000) as dl_info:
+                try:
+                    page.goto(url, timeout=20_000)
+                except Exception:
+                    # goto pode levantar timeout/navigation ao iniciar download
+                    pass
+        except Exception as e:
+            if "Timeout" in type(e).__name__:
+                browser.close()
+                raise RuntimeError(
+                    "Sessão do Facebook expirou — o download não foi iniciado.\n"
+                    "Solução: rode  python scrape_campaigns.py  para fazer login novamente,\n"
+                    "depois rode  python run_planc_local.py  de novo."
+                )
+            raise
 
         download = dl_info.value
         filename = download.suggested_filename or "report.csv"
