@@ -4,7 +4,7 @@
 var CONFIG = {
   SOURCE_FOLDER_ID: '1dozTRcJLqlwOuoTg_qf4DfQHBZbIAGG-',
   DEST_SPREADSHEET_ID: '1NH4KFNxwoZ7e6JzFsHhNm7X8AeFlWU-ek2Af9tnnWt8',
-  TRIGGER_HOUR: 6,
+  TRIGGER_HOURS: [9, 13, 17],  // horários de execução diária
   TEMP_FILE_PREFIX: '_tmp_import_'
 };
 
@@ -100,17 +100,21 @@ function normalizar(str) {
 // TRIGGER — execute UMA VEZ manualmente para agendar
 // ============================================================
 function configurarTriggerDiario() {
+  // Remove todos os triggers anteriores da função para evitar duplicatas
   ScriptApp.getProjectTriggers()
     .filter(function(t) { return t.getHandlerFunction() === 'importarXlsxParaSheet'; })
     .forEach(function(t) { ScriptApp.deleteTrigger(t); });
 
-  ScriptApp.newTrigger('importarXlsxParaSheet')
-    .timeBased()
-    .everyDays(1)
-    .atHour(CONFIG.TRIGGER_HOUR)
-    .create();
+  // Cria um trigger para cada horário configurado
+  CONFIG.TRIGGER_HOURS.forEach(function(hora) {
+    ScriptApp.newTrigger('importarXlsxParaSheet')
+      .timeBased()
+      .everyDays(1)
+      .atHour(hora)
+      .create();
+  });
 
-  Logger.log('Trigger diário configurado para ' + CONFIG.TRIGGER_HOUR + 'h.');
+  Logger.log('Triggers configurados para: ' + CONFIG.TRIGGER_HOURS.join('h, ') + 'h.');
 }
 
 // ============================================================
