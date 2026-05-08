@@ -14,11 +14,6 @@ var CONFIG = {
 function importarXlsxParaSheet() {
   var folder = DriveApp.getFolderById(CONFIG.SOURCE_FOLDER_ID);
   var destSpreadsheet = SpreadsheetApp.openById(CONFIG.DEST_SPREADSHEET_ID);
-  var props = PropertiesService.getScriptProperties();
-
-  // Mapa persistente: fileId → nomeAba  (sobrevive entre execuções)
-  var mapa = JSON.parse(props.getProperty('fileIdToTabName') || '{}');
-
   var processados = [];
   var erros = [];
   var tipos = [MimeType.MICROSOFT_EXCEL, MimeType.MICROSOFT_EXCEL_LEGACY];
@@ -27,24 +22,20 @@ function importarXlsxParaSheet() {
     var files = folder.getFilesByType(mime);
     while (files.hasNext()) {
       var file = files.next();
-      var fileId = file.getId();
       var nomeArquivo = file.getName().replace(/\.xlsx?$/i, '').substring(0, 100);
 
       var tempId = null;
       try {
-        // Converte xlsx → Google Sheets temporariamente
         var tempFile = Drive.Files.copy(
-          { title: CONFIG.TEMP_FILE_PREFIX + fileId, mimeType: MimeType.GOOGLE_SHEETS },
-          fileId
+          { title: CONFIG.TEMP_FILE_PREFIX + file.getId(), mimeType: MimeType.GOOGLE_SHEETS },
+          file.getId()
         );
         tempId = tempFile.id;
 
         var sourceSheet = SpreadsheetApp.openById(tempId).getSheets()[0];
         var data = sourceSheet.getDataRange().getValues();
 
-        // Resolve qual aba usar, usando fileId como chave estável
-        var destSheet = resolverAba(destSpreadsheet, fileId, nomeArquivo, mapa);
-
+        var destSheet = resolverAbaPorNome(destSpreadsheet, nomeArquivo);
         destSheet.clearContents();
         if (data.length > 0 && data[0].length > 0) {
           destSheet.getRange(1, 1, data.length, data[0].length).setValues(data);
@@ -64,9 +55,6 @@ function importarXlsxParaSheet() {
     }
   });
 
-  // Persiste o mapa atualizado
-  props.setProperty('fileIdToTabName', JSON.stringify(mapa));
-
   var resumo = 'Importação concluída em ' + new Date().toLocaleString('pt-BR') + '\n'
     + 'Processados (' + processados.length + '): ' + processados.join(', ') + '\n'
     + (erros.length ? 'Erros (' + erros.length + '): ' + erros.join(' | ') : 'Sem erros.');
@@ -76,30 +64,36 @@ function importarXlsxParaSheet() {
 }
 
 // ============================================================
-// Resolve a aba de destino pelo fileId (chave estável)
-// Se o arquivo foi renomeado → renomeia a aba existente
-// Se é novo → cria uma aba com o nome atual do arquivo
+// Localiza a aba pelo nome normalizado para evitar duplicatas
+// por pequenas variações (acentos, maiúsculas, espaços extras).
+// Se encontrar → usa a aba existente (e corrige o nome se mudou).
+// Se não encontrar → cria uma aba nova.
 // ============================================================
-function resolverAba(spreadsheet, fileId, nomeAtual, mapa) {
-  var tabNameAnterior = mapa[fileId];
+function resolverAbaPorNome(spreadsheet, nomeArquivo) {
+  var chave = normalizar(nomeArquivo);
+  var sheets = spreadsheet.getSheets();
 
-  if (tabNameAnterior) {
-    var sheet = spreadsheet.getSheetByName(tabNameAnterior);
-    if (sheet) {
-      // Arquivo renomeado → atualiza o nome da aba automaticamente
-      if (tabNameAnterior !== nomeAtual) {
-        sheet.setName(nomeAtual);
-        Logger.log('Aba renomeada: "' + tabNameAnterior + '" → "' + nomeAtual + '"');
-        mapa[fileId] = nomeAtual;
+  for (var i = 0; i < sheets.length; i++) {
+    if (normalizar(sheets[i].getName()) === chave) {
+      // Corrige o nome da aba caso tenha mudado ligeiramente
+      if (sheets[i].getName() !== nomeArquivo) {
+        Logger.log('Nome corrigido: "' + sheets[i].getName() + '" → "' + nomeArquivo + '"');
+        sheets[i].setName(nomeArquivo);
       }
-      return sheet;
+      return sheets[i];
     }
   }
 
-  // Aba ainda não existe — cria e registra no mapa
-  var novaAba = spreadsheet.getSheetByName(nomeAtual) || spreadsheet.insertSheet(nomeAtual);
-  mapa[fileId] = nomeAtual;
-  return novaAba;
+  return spreadsheet.insertSheet(nomeArquivo);
+}
+
+// Remove acentos, converte para minúsculas e colapsa espaços
+function normalizar(str) {
+  return str
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // remove acentos
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // ============================================================
@@ -127,12 +121,4 @@ function limparTemporarios() {
   var count = 0;
   while (files.hasNext()) { files.next().setTrashed(true); count++; }
   Logger.log('Temporários removidos: ' + count);
-}
-
-// ============================================================
-// UTILITÁRIO — exibe o mapa fileId → nomeAba salvo
-// ============================================================
-function verMapa() {
-  var mapa = PropertiesService.getScriptProperties().getProperty('fileIdToTabName');
-  Logger.log(mapa || 'Mapa vazio.');
 }
