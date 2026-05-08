@@ -4,7 +4,7 @@
 var CONFIG = {
   SOURCE_FOLDER_ID: '1dozTRcJLqlwOuoTg_qf4DfQHBZbIAGG-',
   DEST_SPREADSHEET_ID: '1NH4KFNxwoZ7e6JzFsHhNm7X8AeFlWU-ek2Af9tnnWt8',
-  TRIGGER_HOUR: 6,           // hora do disparo diário (0–23, fuso do projeto)
+  TRIGGER_HOUR: 6,
   TEMP_FILE_PREFIX: '_tmp_import_'
 };
 
@@ -14,58 +14,58 @@ var CONFIG = {
 function importarXlsxParaSheet() {
   var folder = DriveApp.getFolderById(CONFIG.SOURCE_FOLDER_ID);
   var destSpreadsheet = SpreadsheetApp.openById(CONFIG.DEST_SPREADSHEET_ID);
+  var props = PropertiesService.getScriptProperties();
+
+  // Mapa persistente: fileId → nomeAba  (sobrevive entre execuções)
+  var mapa = JSON.parse(props.getProperty('fileIdToTabName') || '{}');
+
   var processados = [];
   var erros = [];
-
   var tipos = [MimeType.MICROSOFT_EXCEL, MimeType.MICROSOFT_EXCEL_LEGACY];
 
   tipos.forEach(function(mime) {
     var files = folder.getFilesByType(mime);
     while (files.hasNext()) {
       var file = files.next();
-      var tabName = file.getName()
-        .replace(/\.xlsx?$/i, '')
-        .substring(0, 100); // limite de caracteres no nome da aba
+      var fileId = file.getId();
+      var nomeArquivo = file.getName().replace(/\.xlsx?$/i, '').substring(0, 100);
 
       var tempId = null;
       try {
-        // Converte o xlsx para Google Sheets temporariamente
-        var tempResource = { title: CONFIG.TEMP_FILE_PREFIX + file.getId(), mimeType: MimeType.GOOGLE_SHEETS };
-        var tempFile = Drive.Files.copy(tempResource, file.getId());
+        // Converte xlsx → Google Sheets temporariamente
+        var tempFile = Drive.Files.copy(
+          { title: CONFIG.TEMP_FILE_PREFIX + fileId, mimeType: MimeType.GOOGLE_SHEETS },
+          fileId
+        );
         tempId = tempFile.id;
 
-        // Lê apenas a primeira aba do arquivo convertido
-        var tempSpreadsheet = SpreadsheetApp.openById(tempId);
-        var sourceSheet = tempSpreadsheet.getSheets()[0];
+        var sourceSheet = SpreadsheetApp.openById(tempId).getSheets()[0];
         var data = sourceSheet.getDataRange().getValues();
 
-        // Localiza ou cria a aba de destino com o nome do arquivo
-        var destSheet = destSpreadsheet.getSheetByName(tabName);
-        if (!destSheet) {
-          destSheet = destSpreadsheet.insertSheet(tabName);
-        } else {
-          destSheet.clearContents();
-        }
+        // Resolve qual aba usar, usando fileId como chave estável
+        var destSheet = resolverAba(destSpreadsheet, fileId, nomeArquivo, mapa);
 
-        // Grava os dados
+        destSheet.clearContents();
         if (data.length > 0 && data[0].length > 0) {
           destSheet.getRange(1, 1, data.length, data[0].length).setValues(data);
         }
 
-        processados.push(tabName);
+        processados.push(nomeArquivo);
 
       } catch (e) {
-        erros.push(tabName + ': ' + e.message);
-        Logger.log('ERRO em ' + tabName + ' — ' + e.message);
+        erros.push(nomeArquivo + ': ' + e.message);
+        Logger.log('ERRO em ' + nomeArquivo + ' — ' + e.message);
 
       } finally {
-        // Sempre remove o arquivo temporário, mesmo em caso de erro
         if (tempId) {
           try { DriveApp.getFileById(tempId).setTrashed(true); } catch (_) {}
         }
       }
     }
   });
+
+  // Persiste o mapa atualizado
+  props.setProperty('fileIdToTabName', JSON.stringify(mapa));
 
   var resumo = 'Importação concluída em ' + new Date().toLocaleString('pt-BR') + '\n'
     + 'Processados (' + processados.length + '): ' + processados.join(', ') + '\n'
@@ -76,10 +76,36 @@ function importarXlsxParaSheet() {
 }
 
 // ============================================================
+// Resolve a aba de destino pelo fileId (chave estável)
+// Se o arquivo foi renomeado → renomeia a aba existente
+// Se é novo → cria uma aba com o nome atual do arquivo
+// ============================================================
+function resolverAba(spreadsheet, fileId, nomeAtual, mapa) {
+  var tabNameAnterior = mapa[fileId];
+
+  if (tabNameAnterior) {
+    var sheet = spreadsheet.getSheetByName(tabNameAnterior);
+    if (sheet) {
+      // Arquivo renomeado → atualiza o nome da aba automaticamente
+      if (tabNameAnterior !== nomeAtual) {
+        sheet.setName(nomeAtual);
+        Logger.log('Aba renomeada: "' + tabNameAnterior + '" → "' + nomeAtual + '"');
+        mapa[fileId] = nomeAtual;
+      }
+      return sheet;
+    }
+  }
+
+  // Aba ainda não existe — cria e registra no mapa
+  var novaAba = spreadsheet.getSheetByName(nomeAtual) || spreadsheet.insertSheet(nomeAtual);
+  mapa[fileId] = nomeAtual;
+  return novaAba;
+}
+
+// ============================================================
 // TRIGGER — execute UMA VEZ manualmente para agendar
 // ============================================================
 function configurarTriggerDiario() {
-  // Remove triggers anteriores da mesma função para evitar duplicatas
   ScriptApp.getProjectTriggers()
     .filter(function(t) { return t.getHandlerFunction() === 'importarXlsxParaSheet'; })
     .forEach(function(t) { ScriptApp.deleteTrigger(t); });
@@ -94,14 +120,19 @@ function configurarTriggerDiario() {
 }
 
 // ============================================================
-// UTILITÁRIO — limpa eventuais arquivos temporários órfãos
+// UTILITÁRIO — limpa arquivos temporários órfãos
 // ============================================================
 function limparTemporarios() {
   var files = DriveApp.searchFiles('title contains "' + CONFIG.TEMP_FILE_PREFIX + '"');
   var count = 0;
-  while (files.hasNext()) {
-    files.next().setTrashed(true);
-    count++;
-  }
+  while (files.hasNext()) { files.next().setTrashed(true); count++; }
   Logger.log('Temporários removidos: ' + count);
+}
+
+// ============================================================
+// UTILITÁRIO — exibe o mapa fileId → nomeAba salvo
+// ============================================================
+function verMapa() {
+  var mapa = PropertiesService.getScriptProperties().getProperty('fileIdToTabName');
+  Logger.log(mapa || 'Mapa vazio.');
 }
