@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS `analytics-contas.03_MKT_SALES.Tb_HubSpot_Deals` (
   Deal_Source          STRING,     -- origem normalizada (de-para)
   Deal_Source_Data_1   STRING,
   Deal_Source_Data_2   STRING,
-  Contact_ID           STRING,     -- contato associado (principal) -> origem "de marketing"
+  Campaign_ID          STRING,     -- ID da campanha de Ads (de Deal_Source_Data_1 quando origem paga)
+  Contact_ID           STRING,     -- contato associado (principal) -> origem "de marketing" + campanha
   hs_lastmodifieddate  TIMESTAMP,
   _synced_at           TIMESTAMP
 )
@@ -71,8 +72,13 @@ CREATE TABLE IF NOT EXISTS `analytics-contas.03_MKT_SALES.Tb_HubSpot_Contacts` (
   Contact_Created_At       TIMESTAMP,
   Origem_Raw               STRING,   -- hs_analytics_source (enum cru)
   Origem                   STRING,   -- normalizada (de-para)
-  Origem_Data_1            STRING,   -- hs_analytics_source_data_1 (URL / INTEGRATION / keyword)
-  Origem_Data_2            STRING,   -- hs_analytics_source_data_2 (ex.: GOOGLE, id)
+  Origem_Data_1            STRING,   -- hs_analytics_source_data_1 (cru: p/ paga = ID da campanha; senão URL/INTEGRATION)
+  Origem_Data_2            STRING,   -- hs_analytics_source_data_2 (cru: p/ Paid Search = palavra-chave; ex.: GOOGLE)
+  -- Campanha (para join com as tabelas de Ads) --------------------------
+  Campaign_ID              STRING,   -- ID da campanha de Ads (de Origem_Data_1 quando origem paga) -> chave de join
+  Campaign_Keyword         STRING,   -- palavra-chave (Origem_Data_2 quando Paid Search)
+  Campaign_Name            STRING,   -- nome legível, extraído de utm_campaign da 1ª URL (best-effort; pode ser NULL)
+  First_URL                STRING,   -- hs_analytics_first_url (contém os UTMs de entrada)
   Latest_Source            STRING,   -- hs_latest_source
   First_Conversion         STRING,   -- first_conversion_event_name (formulário)
   First_Touch_Campaign     STRING,   -- hs_analytics_first_touch_converting_campaign

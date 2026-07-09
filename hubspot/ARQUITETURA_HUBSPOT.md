@@ -180,6 +180,7 @@ Nós nativos existem: **HubSpot node** e **Google BigQuery node** no n8n (ver Fo
 | Origem dos deals | Quase sempre `OFFLINE` (IMPORT/CRM_UI) → herdar do **contato associado** |
 | `amount` | Frequentemente vazio; moeda `deal_currency_code = BRL` |
 | Volumes | ~89k contacts, ~16k deals → **carga inicial janelada** (cap 10k do Search) |
+| Campanha | Para origens pagas, `hs_analytics_source_data_1` = **ID da campanha de Ads** (ex.: `23300864858`) → capturado como `Campaign_ID` (chave de **join com as tabelas de Ads**). `source_data_2` = palavra-chave. Nome legível é best-effort via `utm_campaign` da 1ª URL (`Campaign_Name`, pode ser NULL). |
 
 **Pendência única para produção:** puxar as **associações deal↔contact** no n8n (o Search do conector não as traz) para que a origem "de marketing" role do contato para o deal. Já está previsto no `vw_hubspot_deals_stage` via `COALESCE`.
 
