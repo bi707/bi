@@ -12,14 +12,32 @@ MERGE consolida em `Tb_HubSpot_*`. Ver `ARQUITETURA_HUBSPOT.md`.
 
 ## 0. Credenciais no n8n (uma vez)
 
-### 0.1 HubSpot — Private App token
-- **HubSpot → Settings → Integrations → Private Apps → Create** com scopes de
-  leitura: `crm.objects.contacts.read`, `crm.objects.deals.read`,
-  `crm.schemas.contacts.read`, `crm.schemas.deals.read`, `crm.objects.owners.read`.
-- Copie o **Access token** (`pat-na1-...`).
-- No n8n: **Credentials → New → HubSpot App Token** (ou use um genérico
-  **Header Auth**: header `Authorization`, valor `Bearer pat-na1-...`).
-  Nos nós HTTP abaixo uso **Header Auth** para ter controle total.
+### 0.1 HubSpot — token de API
+
+> A conta Benner (`50838441`) já migrou para a nova plataforma de desenvolvedor.
+> Os "Aplicativos privados" viraram **Aplicativos Legados**; o caminho novo e
+> recomendado é **Chaves de serviço** (*Service Keys*). Ambos geram um token
+> `pat-na1-...` usado como `Bearer` — funcionam igual no n8n.
+
+**Caminho usado (Chaves de serviço):**
+1. `https://app.hubspot.com/service-keys/50838441/create` (ou **Desenvolvimento → Chaves → Chaves de atendimento/serviço [BETA] → Criar**). Requer Super Admin.
+2. Nome (ex.: `mdass pipeline ads` / `n8n BigQuery Sync`).
+3. **Escopos** (mínimo necessário — só leitura):
+   - `crm.objects.contacts.read`, `crm.objects.deals.read`
+   - `crm.schemas.contacts.read`, `crm.schemas.deals.read`
+   - `crm.objects.owners.read` (opcional)
+   - *(a chave criada também tem `marketing.campaigns.read` e `marketing.campaigns.revenue.read` — não são necessárias para deals/contacts, mas habilitam atribuição por campanha no futuro.)*
+4. **Criar → Mostrar → Copiar** o token (`pat-na1-...`). Aparece só uma vez.
+
+> **Fallback:** se as Chaves de serviço (BETA) derem problema, um **Aplicativo
+> privado legado** com os mesmos escopos funciona igual para leitura.
+
+**No n8n:** guarde o token numa credencial **Header Auth** — header `Authorization`,
+valor `Bearer pat-na1-...`. Os nós HTTP abaixo usam essa credencial.
+
+> 🔒 **Rotação:** se o token for exposto (ex.: colado em chat/e-mail), use
+> **Girar** na tela da chave para invalidar e gerar um novo, e atualize a
+> credencial do n8n.
 
 ### 0.2 Google BigQuery — Service Account
 - Reusar a Service Account que já grava no BigQuery (a mesma do `credentials.json`).
