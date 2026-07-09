@@ -3,6 +3,8 @@
 **Cliente:** Benner (`mdass@bennerservicos.com.br`)
 **Objetivo:** Trazer **deals** e **contacts** do HubSpot para o BigQuery e entregar uma **view final por origem e data**, no mesmo padrão que a agência já consome para o RD Station / Ads (`03_MKT_SALES.vw_ads_crm_results`).
 **Stack:** no-code / low-code — **n8n** (extração) → **BigQuery** (staging → modelagem via SQL/Scheduled Queries). Sem servidor Python para manter.
+**Conta:** portal HubSpot `50838441` · moeda **BRL** · TZ `America/Sao_Paulo` · ~89k contacts, ~16k deals.
+**Status:** esquema **validado na conta real** via conector (jul/2026) e **testado ponta a ponta no BigQuery** com amostra (ver §6).
 **Última atualização:** Julho 2026
 
 ---
@@ -75,20 +77,24 @@ Base URL: `https://api.hubapi.com` · Auth: **Private App token** no header `Aut
 
 Valores do enum `hs_analytics_source`: `ORGANIC_SEARCH`, `PAID_SEARCH`, `EMAIL_MARKETING`, `SOCIAL_MEDIA`, `PAID_SOCIAL`, `REFERRALS`, `OTHER_CAMPAIGNS`, `DIRECT_TRAFFIC`, `OFFLINE`, `CRM_UI`, etc.
 
-> ⚠️ **UTMs:** diferente do RD, o HubSpot **não guarda `utm_source/medium/campaign` como propriedades nativas**. O equivalente é `hs_analytics_source` (+ `source_data_1/2`). Se o cliente Benner captura UTM em **propriedades customizadas**, elas aparecem no `GET /crm/v3/properties/contacts` — precisamos validar e mapear (ver §5, ação de validação).
+> ✅ **UTMs — validado:** a conta Benner **não tem** propriedades `utm_*` customizadas. A atribuição é 100% via `hs_analytics_source` (enum) + `source_data_1/2` (URL de origem, palavra-chave, `INTEGRATION`/`IMPORT`/`CRM_UI`). Por isso as colunas `UTM_*` do esquema padrão ficam `NULL` para o HubSpot; a dimensão de canal é a `origem`.
+>
+> Valores reais do enum `hs_analytics_source` na conta: `ORGANIC_SEARCH`, `PAID_SEARCH`, `PAID_SOCIAL`, `SOCIAL_MEDIA` (rótulo "Organic Social"), `EMAIL_MARKETING`, `REFERRALS`, `AI_REFERRALS`, `OTHER_CAMPAIGNS`, `DIRECT_TRAFFIC`, `OFFLINE`.
 
 **Contacts — datas / funil:**
 
 | Propriedade | Papel |
 |---|---|
 | `createdate` | Data de criação do contato (= "cadastro" / entrada no topo) |
-| `lifecyclestage` | Estágio atual |
-| `hs_lifecyclestage_lead_date` | Entrou em Lead |
-| `hs_lifecyclestage_marketingqualifiedlead_date` | Entrou em MQL |
-| `hs_lifecyclestage_salesqualifiedlead_date` | Entrou em SQL |
-| `hs_lifecyclestage_opportunity_date` | Entrou em Opportunity |
-| `hs_lifecyclestage_customer_date` | Virou Cliente |
+| `lifecyclestage` | Estágio atual (subscriber/lead/mql/sql/opportunity/customer) |
+| `hs_v2_date_entered_lead` | Entrou em Lead |
+| `hs_v2_date_entered_marketingqualifiedlead` | Entrou em MQL |
+| `hs_v2_date_entered_salesqualifiedlead` | Entrou em SQL |
+| `hs_v2_date_entered_opportunity` | Entrou em Opportunity |
+| `hs_v2_date_entered_customer` | Virou Cliente |
 | `hs_lastmodifieddate` | *Watermark* do sync incremental |
+
+> ✅ **Validado na conta Benner:** usa-se o modelo **v2** (`hs_v2_date_entered_<stage>`). O legado `hs_lifecyclestage_*_date` vem **vazio** nesta conta.
 
 **Deals — origem, datas, valor:**
 
@@ -162,20 +168,44 @@ Nós nativos existem: **HubSpot node** e **Google BigQuery node** no n8n (ver Fo
 
 ---
 
-## 5. Ações de validação (antes de "fechar" a modelagem)
+## 5. Validação na conta real (FEITA via conector, jul/2026)
 
-Precisam da conta real do Benner (token de Private App ou conector ligado):
+| Item | Resultado |
+|---|---|
+| Propriedades de origem | `hs_analytics_source` (+ `source_data_1/2`) em contacts **e** deals ✓ |
+| UTMs customizados | **Não existem** — atribuição só por `hs_analytics_source` |
+| Datas de funil | Modelo **v2** (`hs_v2_date_entered_*`); legado vazio |
+| Pipelines de deals | **Vários** (New Logo, Base, Canais, Arquiteto, Adm. Comercial, Sales Pipeline, Migração), cada um com stage IDs próprios |
+| Ganho/Perdido | Usar **`hs_is_closed_won` / `hs_is_closed`** (booleanos, independem do pipeline) — não mapear por rótulo de stage |
+| Origem dos deals | Quase sempre `OFFLINE` (IMPORT/CRM_UI) → herdar do **contato associado** |
+| `amount` | Frequentemente vazio; moeda `deal_currency_code = BRL` |
+| Volumes | ~89k contacts, ~16k deals → **carga inicial janelada** (cap 10k do Search) |
 
-1. **`GET /crm/v3/properties/contacts` e `.../deals`** → confirmar nomes exatos, principalmente **propriedades customizadas de UTM/origem** que o RD tinha e o HubSpot pode ter como custom.
-2. **`GET /crm/v3/pipelines/deals`** → mapear IDs de `dealstage` → rótulos e identificar quais estágios contam como `won` / `lost` / `opportunity`.
-3. **Amostra de 10 contacts e 10 deals** → conferir preenchimento de `hs_analytics_source` (contatos criados via integração podem cair em `OFFLINE`).
-4. **Alinhar rótulos de `origem`** com os valores distintos que o RD já grava, para o `UNION` consolidar corretamente.
+**Pendência única para produção:** puxar as **associações deal↔contact** no n8n (o Search do conector não as traz) para que a origem "de marketing" role do contato para o deal. Já está previsto no `vw_hubspot_deals_stage` via `COALESCE`.
 
-Posso rodar essas 4 validações assim que você me passar o token (coloco em `.env`, como o Meta) **ou** ligar o conector HubSpot neste chat. Aí finalizo os nomes de coluna no SQL.
+## 6. Teste ponta a ponta no BigQuery (FEITO)
+
+Carregada uma amostra real (16 contacts + 10 deals ganhos) em `raw_hubspot_*` → `MERGE` → `Tb_HubSpot_*` → views. A `vw_hubspot_leads_stages` retornou o funil por **origem + data** corretamente, ex.:
+
+```
+origem           data        contacts leads mql clients deals_won  valor_ganho(BRL)
+Busca Orgânica   2026-07-08     2       2    -     -        -            -
+Busca Paga       2026-07-08     3       3    -     -        -            -
+Tráfego Direto   2026-07-08     2       1    -     -        -            -
+Offline          2026-05..06    6       6    4     6        -            -
+Offline          2026-07-07     -       -    -     -        5      1.550.632,89
+Não informado    2026-07-07     -       -    -     -        5      1.282.228,73
+```
+
+> As tabelas `03_MKT_SALES.raw_hubspot_*`, `Tb_HubSpot_*` e as `vw_hubspot_*` **já existem** no BigQuery. Contêm só a amostra de teste — dá para `TRUNCATE TABLE` nos `raw_*`/`Tb_*` antes da primeira carga completa pelo n8n.
+
+## 7. Próximo passo — endpoint no n8n
+
+Ver o blueprint no §4. A criação do workflow n8n (Schedule → HTTP `/search` incremental com paginação → normalização → BigQuery append → Scheduled Query MERGE) é a próxima etapa.
 
 ---
 
-## 6. Arquivos deste diretório
+## 8. Arquivos deste diretório
 
 | Arquivo | Conteúdo |
 |---|---|
