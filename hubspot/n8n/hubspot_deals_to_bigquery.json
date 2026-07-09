@@ -1,0 +1,120 @@
+{
+  "name": "HubSpot Deals -> BigQuery (raw incremental + associations)",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [ { "field": "hours", "hoursInterval": 1 } ] } },
+      "id": "sched-deals",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ -600, 300 ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "sqlQuery": "SELECT CAST(UNIX_MILLIS(COALESCE(MAX(hs_lastmodifieddate), TIMESTAMP '2015-01-01')) AS STRING) AS wm\nFROM `analytics-contas.03_MKT_SALES.Tb_HubSpot_Deals`",
+        "options": {}
+      },
+      "id": "wm-deals",
+      "name": "Get watermark",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [ -380, 300 ],
+      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filterGroups\": [{\"filters\":[{\"propertyName\":\"hs_lastmodifieddate\",\"operator\":\"GTE\",\"value\":\"{{ $json.wm }}\"}]}],\n  \"sorts\": [{\"propertyName\":\"hs_lastmodifieddate\",\"direction\":\"ASCENDING\"}],\n  \"properties\": [\"dealname\",\"pipeline\",\"dealstage\",\"amount\",\"deal_currency_code\",\"createdate\",\"closedate\",\"hs_lastmodifieddate\",\"hs_is_closed\",\"hs_is_closed_won\",\"hs_analytics_source\",\"hs_analytics_source_data_1\",\"hs_analytics_source_data_2\"],\n  \"limit\": 100,\n  \"after\": \"0\"\n}",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": { "parameters": [ { "type": "body", "name": "after", "value": "={{ $response.body.paging?.next?.after }}" } ] },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $response.body.paging?.next?.after ? false : true }}",
+              "limitPagesFetched": false
+            }
+          }
+        }
+      },
+      "id": "search-deals",
+      "name": "HubSpot Search Deals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ -160, 300 ],
+      "credentials": { "httpHeaderAuth": { "id": "REPLACE", "name": "HubSpot Bearer" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v4/associations/deals/contacts/batch/read",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"inputs\": {{ JSON.stringify(($json.results || []).map(d => ({ id: d.id }))) }} }",
+        "options": {}
+      },
+      "id": "assoc-deals",
+      "name": "Associations deals->contacts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 60, 300 ],
+      "credentials": { "httpHeaderAuth": { "id": "REPLACE", "name": "HubSpot Bearer" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const deals = $node[\"HubSpot Search Deals\"].json.results || [];\nconst assoc = $json.results || [];\nconst map = {};\nfor (const a of assoc) {\n  const from = a.from?.id;\n  const to = (a.to || [])[0]?.toObjectId;\n  if (from) map[from] = to || null;\n}\nreturn deals.map(d => ({ json: {\n  Deal_ID: d.id,\n  hs_lastmodifieddate: d.properties?.hs_lastmodifieddate ?? null,\n  _synced_at: new Date().toISOString(),\n  _raw: JSON.stringify({\n    properties: d.properties,\n    associations: { contacts: { results: map[d.id] ? [{ id: String(map[d.id]) }] : [] } }\n  })\n}}));"
+      },
+      "id": "code-deals",
+      "name": "Build raw deal rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 280, 300 ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "projectId": { "__rl": true, "value": "analytics-contas", "mode": "id" },
+        "datasetId": { "__rl": true, "value": "03_MKT_SALES", "mode": "id" },
+        "tableId": { "__rl": true, "value": "raw_hubspot_deals", "mode": "id" },
+        "dataMode": "autoMapInputData",
+        "options": {}
+      },
+      "id": "insert-deals",
+      "name": "Append raw_deals",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [ 500, 300 ],
+      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "sqlQuery": "-- Cole aqui o MERGE de DEALS de sql/02_scheduled_merge.sql",
+        "options": {}
+      },
+      "id": "merge-deals",
+      "name": "MERGE deals",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [ 720, 300 ],
+      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+    }
+  ],
+  "connections": {
+    "Schedule": { "main": [ [ { "node": "Get watermark", "type": "main", "index": 0 } ] ] },
+    "Get watermark": { "main": [ [ { "node": "HubSpot Search Deals", "type": "main", "index": 0 } ] ] },
+    "HubSpot Search Deals": { "main": [ [ { "node": "Associations deals->contacts", "type": "main", "index": 0 } ] ] },
+    "Associations deals->contacts": { "main": [ [ { "node": "Build raw deal rows", "type": "main", "index": 0 } ] ] },
+    "Build raw deal rows": { "main": [ [ { "node": "Append raw_deals", "type": "main", "index": 0 } ] ] },
+    "Append raw_deals": { "main": [ [ { "node": "MERGE deals", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

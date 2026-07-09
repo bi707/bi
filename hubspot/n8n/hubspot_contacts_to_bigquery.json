@@ -1,0 +1,110 @@
+{
+  "name": "HubSpot Contacts -> BigQuery (raw incremental)",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [ { "field": "hours", "hoursInterval": 1 } ] } },
+      "id": "sched-contacts",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ -600, 300 ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "sqlQuery": "SELECT CAST(UNIX_MILLIS(COALESCE(MAX(hs_lastmodifieddate), TIMESTAMP '2015-01-01')) AS STRING) AS wm\nFROM `analytics-contas.03_MKT_SALES.Tb_HubSpot_Contacts`",
+        "options": {}
+      },
+      "id": "wm-contacts",
+      "name": "Get watermark",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [ -380, 300 ],
+      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filterGroups\": [{\"filters\":[{\"propertyName\":\"hs_lastmodifieddate\",\"operator\":\"GTE\",\"value\":\"{{ $json.wm }}\"}]}],\n  \"sorts\": [{\"propertyName\":\"hs_lastmodifieddate\",\"direction\":\"ASCENDING\"}],\n  \"properties\": [\"firstname\",\"lastname\",\"email\",\"lifecyclestage\",\"createdate\",\"hs_lastmodifieddate\",\"hs_analytics_source\",\"hs_analytics_source_data_1\",\"hs_analytics_source_data_2\",\"hs_latest_source\",\"first_conversion_event_name\",\"hs_analytics_first_touch_converting_campaign\",\"hs_v2_date_entered_subscriber\",\"hs_v2_date_entered_lead\",\"hs_v2_date_entered_marketingqualifiedlead\",\"hs_v2_date_entered_salesqualifiedlead\",\"hs_v2_date_entered_opportunity\",\"hs_v2_date_entered_customer\"],\n  \"limit\": 100,\n  \"after\": \"0\"\n}",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": { "parameters": [ { "type": "body", "name": "after", "value": "={{ $response.body.paging?.next?.after }}" } ] },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $response.body.paging?.next?.after ? false : true }}",
+              "limitPagesFetched": false
+            }
+          }
+        }
+      },
+      "id": "search-contacts",
+      "name": "HubSpot Search Contacts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ -160, 300 ],
+      "credentials": { "httpHeaderAuth": { "id": "REPLACE", "name": "HubSpot Bearer" } }
+    },
+    {
+      "parameters": { "fieldToSplitOut": "results", "options": {} },
+      "id": "split-contacts",
+      "name": "Split results",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [ 60, 300 ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(({json: it}) => ({ json: {\n  Contact_ID: it.id,\n  hs_lastmodifieddate: it.properties?.hs_lastmodifieddate ?? null,\n  _synced_at: new Date().toISOString(),\n  _raw: JSON.stringify({ properties: it.properties })\n}}));"
+      },
+      "id": "code-contacts",
+      "name": "Build raw rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 280, 300 ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "projectId": { "__rl": true, "value": "analytics-contas", "mode": "id" },
+        "datasetId": { "__rl": true, "value": "03_MKT_SALES", "mode": "id" },
+        "tableId": { "__rl": true, "value": "raw_hubspot_contacts", "mode": "id" },
+        "dataMode": "autoMapInputData",
+        "options": {}
+      },
+      "id": "insert-contacts",
+      "name": "Append raw_contacts",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [ 500, 300 ],
+      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "sqlQuery": "-- Cole aqui o MERGE de CONTACTS de sql/02_scheduled_merge.sql",
+        "options": {}
+      },
+      "id": "merge-contacts",
+      "name": "MERGE contacts",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [ 720, 300 ],
+      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+    }
+  ],
+  "connections": {
+    "Schedule": { "main": [ [ { "node": "Get watermark", "type": "main", "index": 0 } ] ] },
+    "Get watermark": { "main": [ [ { "node": "HubSpot Search Contacts", "type": "main", "index": 0 } ] ] },
+    "HubSpot Search Contacts": { "main": [ [ { "node": "Split results", "type": "main", "index": 0 } ] ] },
+    "Split results": { "main": [ [ { "node": "Build raw rows", "type": "main", "index": 0 } ] ] },
+    "Build raw rows": { "main": [ [ { "node": "Append raw_contacts", "type": "main", "index": 0 } ] ] },
+    "Append raw_contacts": { "main": [ [ { "node": "MERGE contacts", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

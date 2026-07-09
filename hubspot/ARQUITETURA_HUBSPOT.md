@@ -213,6 +213,9 @@ Ver o blueprint no §4. A criação do workflow n8n (Schedule → HTTP `/search`
 | `sql/01_raw_and_clean_tables.sql` | DDL das tabelas RAW e CLEAN + template do MERGE |
 | `sql/02_scheduled_merge.sql` | Scheduled Queries de MERGE (dedup) |
 | `sql/03_views.sql` | Views de modelagem + `vw_hubspot_leads_stages` + patch do `UNION` na view final |
+| `N8N_WORKFLOW.md` | Guia passo a passo dos workflows n8n (contacts e deals) |
+| `n8n/hubspot_contacts_to_bigquery.json` | Workflow n8n importável — contacts |
+| `n8n/hubspot_deals_to_bigquery.json` | Workflow n8n importável — deals (com associações) |
 
 ---
 
