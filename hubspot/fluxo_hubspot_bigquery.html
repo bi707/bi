@@ -1,0 +1,288 @@
+<title>Fluxo HubSpot → BigQuery · MDASS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#F4F6FA; --surface:#FFFFFF; --surface-2:#EDF1F7; --ink:#17212F; --muted:#5A6B80;
+    --line:#D8E0EB; --line-strong:#C2CCDA;
+    --bq:#2F6DB5; --bq-soft:#E6EFFA;
+    --hs:#DB5A34; --hs-soft:#FBE9E1;
+    --mover:#9C4A86; --mover-soft:#F3E7F0;
+    --raw:#7A8699; --clean:#2F6DB5; --marts:#1E8385; --funil:#B7791F; --final:#2E7D52;
+    --shadow:0 1px 2px rgba(20,32,48,.06),0 6px 20px rgba(20,32,48,.05);
+    --radius:14px;
+    --sans:"SF Pro Display",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0D1420; --surface:#151E2C; --surface-2:#1C2637; --ink:#E7EDF6; --muted:#94A4B9;
+      --line:#243247; --line-strong:#33455E;
+      --bq:#6AA6E8; --bq-soft:#16273D;
+      --hs:#F0865F; --hs-soft:#331D14;
+      --mover:#D08BC0; --mover-soft:#2A1B27;
+      --raw:#93A0B4; --clean:#6AA6E8; --marts:#4FC5C7; --funil:#E0B457; --final:#5FC58C;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.32);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#F4F6FA; --surface:#FFFFFF; --surface-2:#EDF1F7; --ink:#17212F; --muted:#5A6B80;
+    --line:#D8E0EB; --line-strong:#C2CCDA;
+    --bq:#2F6DB5; --bq-soft:#E6EFFA; --hs:#DB5A34; --hs-soft:#FBE9E1; --mover:#9C4A86; --mover-soft:#F3E7F0;
+    --raw:#7A8699; --clean:#2F6DB5; --marts:#1E8385; --funil:#B7791F; --final:#2E7D52;
+    --shadow:0 1px 2px rgba(20,32,48,.06),0 6px 20px rgba(20,32,48,.05);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0D1420; --surface:#151E2C; --surface-2:#1C2637; --ink:#E7EDF6; --muted:#94A4B9;
+    --line:#243247; --line-strong:#33455E;
+    --bq:#6AA6E8; --bq-soft:#16273D; --hs:#F0865F; --hs-soft:#331D14; --mover:#D08BC0; --mover-soft:#2A1B27;
+    --raw:#93A0B4; --clean:#6AA6E8; --marts:#4FC5C7; --funil:#E0B457; --final:#5FC58C;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.32);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.5;-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
+  .wrap{max-width:1060px;margin:0 auto;padding:48px 24px 72px}
+
+  header.head{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px 28px;
+    border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:36px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--bq);margin:0 0 8px}
+  h1{font-size:clamp(24px,3.4vw,34px);font-weight:640;margin:0;text-wrap:balance;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:14.5px;margin:6px 0 0;max-width:60ch}
+  .meta{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
+  .tag{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface-2);
+    border:1px solid var(--line);border-radius:999px;padding:5px 11px;white-space:nowrap}
+
+  /* flow */
+  .flow{display:flex;flex-direction:column;gap:0}
+  .band{display:grid;grid-template-columns:132px 1fr;gap:22px;align-items:stretch}
+  .rail{display:flex;flex-direction:column;gap:6px;padding-top:6px}
+  .rail .lyr{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    font-weight:600;color:var(--layer,var(--muted))}
+  .rail .lyr-sub{font-size:11.5px;color:var(--muted);line-height:1.35}
+  .rail .dot{width:9px;height:9px;border-radius:50%;background:var(--layer,var(--muted));margin-bottom:2px}
+
+  .cards{display:flex;flex-wrap:wrap;gap:14px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:15px 17px;flex:1 1 240px;min-width:240px;position:relative;overflow:hidden}
+  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--layer,var(--line-strong))}
+  .card h3{margin:0;font-size:12.5px;font-family:var(--mono);font-weight:600;letter-spacing:-.01em;
+    color:var(--ink);display:flex;align-items:center;gap:8px;word-break:break-word}
+  .card p{margin:7px 0 0;font-size:12.5px;color:var(--muted);line-height:1.45}
+  .cols{margin:10px 0 0;display:flex;flex-wrap:wrap;gap:5px}
+  .col{font-family:var(--mono);font-size:10.5px;color:var(--ink);background:var(--surface-2);
+    border:1px solid var(--line);border-radius:6px;padding:2px 7px;white-space:nowrap}
+  .kbadge{font-family:var(--mono);font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;
+    background:var(--bq-soft);color:var(--bq);border:1px solid color-mix(in srgb,var(--bq) 30%,transparent)}
+
+  .conn{grid-column:2;display:flex;align-items:center;gap:11px;padding:9px 2px;color:var(--muted)}
+  .conn .arw{color:var(--line-strong);font-size:15px;line-height:1}
+  .conn .op{font-family:var(--mono);font-size:11px;letter-spacing:.02em;color:var(--muted)}
+  .conn .op b{color:var(--ink);font-weight:600}
+
+  .src-row{display:flex;flex-wrap:wrap;gap:14px;align-items:stretch}
+  .grain{margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--funil);font-weight:600;
+    display:inline-flex;align-items:center;gap:7px}
+  .grain .g{background:color-mix(in srgb,var(--funil) 14%,transparent);border:1px solid color-mix(in srgb,var(--funil) 34%,transparent);
+    color:var(--funil);border-radius:6px;padding:2px 8px}
+
+  /* side note for Ads join */
+  .aside{margin-top:14px;border:1px dashed var(--line-strong);border-radius:var(--radius);
+    background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--bq) 5%,transparent));
+    padding:14px 17px}
+  .aside h4{margin:0;font-size:12px;font-family:var(--mono);letter-spacing:.02em;color:var(--bq)}
+  .aside p{margin:6px 0 0;font-size:12.5px;color:var(--muted)}
+  .aside code{font-family:var(--mono);font-size:11.5px;background:var(--surface-2);border:1px solid var(--line);
+    padding:1px 6px;border-radius:5px;color:var(--ink)}
+
+  .legend{margin-top:34px;padding-top:20px;border-top:1px solid var(--line);
+    display:flex;flex-wrap:wrap;gap:16px 26px;align-items:center}
+  .legend .li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .legend .sw{width:11px;height:11px;border-radius:3px}
+  .foot{margin-top:26px;font-size:11.5px;color:var(--muted);font-family:var(--mono);line-height:1.6}
+
+  @media (max-width:640px){
+    .band{grid-template-columns:1fr;gap:8px}
+    .rail{flex-direction:row;align-items:center;gap:10px;flex-wrap:wrap}
+    .conn{grid-column:1}
+    .card{min-width:0;flex-basis:100%}
+  }
+</style>
+
+<div class="wrap">
+  <header class="head">
+    <div>
+      <p class="eyebrow">Documentação · Pipeline de dados</p>
+      <h1>HubSpot → BigQuery: fluxo por origem, campanha e data</h1>
+      <p class="sub">Arquitetura ELT low-code que traz deals e contacts do HubSpot para o BigQuery e entrega o funil comparável a Ads e RD Station na view que a agência já consome.</p>
+    </div>
+    <div class="meta">
+      <span class="tag">portal 50838441</span>
+      <span class="tag">03_MKT_SALES</span>
+      <span class="tag">moeda BRL</span>
+    </div>
+  </header>
+
+  <div class="flow">
+
+    <!-- SOURCE -->
+    <div class="band" style="--layer:var(--hs)">
+      <div class="rail">
+        <span class="dot"></span>
+        <span class="lyr" style="--layer:var(--hs)">Origem</span>
+        <span class="lyr-sub">HubSpot CRM v3</span>
+      </div>
+      <div class="cards src-row">
+        <div class="card" style="--layer:var(--hs)">
+          <h3>HubSpot CRM</h3>
+          <p>API v3. Objetos <b>Contacts</b> e <b>Deals</b> + <b>Associations</b> (deal→contato). Autenticação por Private App / Service Key (Bearer).</p>
+          <div class="cols"><span class="col">contacts</span><span class="col">deals</span><span class="col">associations</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="band"><div class="conn">
+      <span class="arw">▼</span>
+      <span class="op"><b>n8n</b> · Schedule → <b>/search</b> incremental (hs_lastmodifieddate) → paginação → Associations v4 → <b>append</b></span>
+    </div></div>
+
+    <!-- RAW -->
+    <div class="band" style="--layer:var(--raw)">
+      <div class="rail">
+        <span class="dot"></span>
+        <span class="lyr" style="--layer:var(--raw)">Raw</span>
+        <span class="lyr-sub">Landing append-only</span>
+      </div>
+      <div class="cards">
+        <div class="card" style="--layer:var(--raw)">
+          <h3>raw_hubspot_contacts</h3>
+          <p>Payload bruto, 1 linha por versão sincronizada.</p>
+          <div class="cols"><span class="col">Contact_ID</span><span class="col">_raw JSON</span><span class="col">_synced_at</span></div>
+        </div>
+        <div class="card" style="--layer:var(--raw)">
+          <h3>raw_hubspot_deals</h3>
+          <p>Idem deals, com a associação de contato embutida no JSON.</p>
+          <div class="cols"><span class="col">Deal_ID</span><span class="col">_raw JSON</span><span class="col">_synced_at</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="band"><div class="conn">
+      <span class="arw">▼</span>
+      <span class="op">Scheduled Query · <b>MERGE</b> — dedup por id, mantém a versão mais recente (hs_lastmodifieddate)</span>
+    </div></div>
+
+    <!-- CLEAN -->
+    <div class="band" style="--layer:var(--clean)">
+      <div class="rail">
+        <span class="dot"></span>
+        <span class="lyr" style="--layer:var(--clean)">Clean</span>
+        <span class="lyr-sub">Estado atual, tipado</span>
+      </div>
+      <div class="cards">
+        <div class="card" style="--layer:var(--clean)">
+          <h3>Tb_HubSpot_Contacts <span class="kbadge">24 col</span></h3>
+          <p>1 linha por contato. Origem normalizada + datas de estágio (modelo v2) + campanha.</p>
+          <div class="cols"><span class="col">Origem</span><span class="col">Campaign_ID</span><span class="col">Campaign_Name</span><span class="col">Became_Lead_Date…</span></div>
+        </div>
+        <div class="card" style="--layer:var(--clean)">
+          <h3>Tb_HubSpot_Deals <span class="kbadge">18 col</span></h3>
+          <p>1 linha por deal. Ganho/perdido por hs_is_closed*, valor em BRL, contato associado.</p>
+          <div class="cols"><span class="col">Deal_Status</span><span class="col">Deal_Amount</span><span class="col">Campaign_ID</span><span class="col">Contact_ID</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="band"><div class="conn">
+      <span class="arw">▼</span>
+      <span class="op">Views SQL</span>
+    </div></div>
+
+    <!-- MARTS -->
+    <div class="band" style="--layer:var(--marts)">
+      <div class="rail">
+        <span class="dot"></span>
+        <span class="lyr" style="--layer:var(--marts)">Modelagem</span>
+        <span class="lyr-sub">Views (marts)</span>
+      </div>
+      <div class="cards">
+        <div class="card" style="--layer:var(--marts)">
+          <h3>vw_hubspot_contacts_lifecycle</h3>
+          <p>1 contato + origem, campanha e carimbos de cada estágio.</p>
+        </div>
+        <div class="card" style="--layer:var(--marts)">
+          <h3>vw_hubspot_deals_stage</h3>
+          <p>1 deal + contato: origem e campanha herdadas do contato associado.</p>
+        </div>
+        <div class="card" style="--layer:var(--marts)">
+          <h3>vw_hubspot_stage_events</h3>
+          <p><b>Fato</b> — unpivot dos carimbos v2: cada estágio vira 1 linha na data em que aconteceu.</p>
+          <div class="cols"><span class="col">stage</span><span class="col">event_date</span><span class="col">campanha</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="band"><div class="conn">
+      <span class="arw">▼</span>
+      <span class="op">Agregação</span>
+    </div></div>
+
+    <!-- FUNIL -->
+    <div class="band" style="--layer:var(--funil)">
+      <div class="rail">
+        <span class="dot"></span>
+        <span class="lyr" style="--layer:var(--funil)">Funil</span>
+        <span class="lyr-sub">Esquema padrão</span>
+      </div>
+      <div class="cards">
+        <div class="card" style="--layer:var(--funil)">
+          <h3>vw_hubspot_leads_stages</h3>
+          <p>Contagens do funil no mesmo esquema de <code style="font-family:var(--mono);font-size:11px">vw_ads_crm_results</code>, prontas para o UNION.</p>
+          <div class="cols"><span class="col">contacts</span><span class="col">leads</span><span class="col">mql</span><span class="col">sql</span><span class="col">opportunities</span><span class="col">deals_won</span><span class="col">clients</span><span class="col">amount</span></div>
+          <div class="grain"><span class="g">grão = origem × campanha × data</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="band"><div class="conn">
+      <span class="arw">▼</span>
+      <span class="op"><b>UNION ALL</b> · patch em vw_ads_crm_results</span>
+    </div></div>
+
+    <!-- FINAL -->
+    <div class="band" style="--layer:var(--final)">
+      <div class="rail">
+        <span class="dot"></span>
+        <span class="lyr" style="--layer:var(--final)">Consumo</span>
+        <span class="lyr-sub">View final da agência</span>
+      </div>
+      <div class="cards">
+        <div class="card" style="--layer:var(--final)">
+          <h3>vw_ads_crm_results</h3>
+          <p><b>Ads ⋃ RD Station ⋃ HubSpot</b> — comparável pela mesma origem, campanha e data. A agência consome aqui, sem view nova para aprender.</p>
+          <div class="cols"><span class="col">source_table = 'hubspot'</span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="aside">
+    <h4>↔ Join com as tabelas de Ads (nome real da campanha e gasto)</h4>
+    <p><b>Paid Search:</b> <code>Campaign_ID</code> = ID do Google Ads (ex.: <code>23300864858</code>) → join com as tabelas de Ads para obter nome e custo. &nbsp;•&nbsp; <b>Paid Social:</b> <code>Campaign_Name</code> já traz o nome legível (<code>[mdass][leads][aon]…</code>, <code>meta_leads_rh_express</code>). &nbsp; Na view, <code>campanha = COALESCE(nome, ID)</code>.</p>
+  </div>
+
+  <div class="legend">
+    <span class="li"><span class="sw" style="background:var(--hs)"></span>Origem (HubSpot)</span>
+    <span class="li"><span class="sw" style="background:var(--raw)"></span>Raw</span>
+    <span class="li"><span class="sw" style="background:var(--clean)"></span>Clean</span>
+    <span class="li"><span class="sw" style="background:var(--marts)"></span>Modelagem</span>
+    <span class="li"><span class="sw" style="background:var(--funil)"></span>Funil</span>
+    <span class="li"><span class="sw" style="background:var(--final)"></span>Consumo</span>
+  </div>
+
+  <p class="foot">
+    ELT / medallion · dedup idempotente via MERGE · sync incremental por hs_lastmodifieddate<br>
+    Artefatos: hubspot/ARQUITETURA_HUBSPOT.md · sql/01–04 · N8N_WORKFLOW.md · n8n/*.json
+  </p>
+</div>
