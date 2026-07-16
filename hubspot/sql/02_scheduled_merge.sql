@@ -113,8 +113,11 @@ USING (
          JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_1'), NULL)  AS Campaign_ID,
       IF(JSON_VALUE(_raw, '$.properties.hs_analytics_source') = 'PAID_SEARCH',
          JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_2'), NULL)  AS Campaign_Keyword,
-      -- Nome legível: best-effort via utm_campaign da 1ª URL (pode vir NULL / percent-encoded)
-      REGEXP_EXTRACT(JSON_VALUE(_raw, '$.properties.hs_analytics_first_url'), r'[?&](?:utm_campaign|utm_content)=([^&]+)') AS Campaign_Name,
+      -- Nome legível da campanha: no PAID_SOCIAL (Meta/LinkedIn), source_data_2 traz o
+      -- nome (ex.: '[mdass][leads][aon]...', 'meta_leads_rh_express'). No PAID_SEARCH o
+      -- source_data_2 é a palavra-chave e o nome vem do JOIN por Campaign_ID com as tabelas de Ads.
+      IF(JSON_VALUE(_raw, '$.properties.hs_analytics_source') = 'PAID_SOCIAL',
+         JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_2'), NULL) AS Campaign_Name,
       JSON_VALUE(_raw, '$.properties.hs_analytics_first_url')             AS First_URL,
       JSON_VALUE(_raw, '$.properties.hs_latest_source')                   AS Latest_Source,
       JSON_VALUE(_raw, '$.properties.first_conversion_event_name')        AS First_Conversion,
