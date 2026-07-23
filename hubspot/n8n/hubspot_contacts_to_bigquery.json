@@ -2,12 +2,39 @@
   "name": "HubSpot Contacts -> BigQuery (raw incremental)",
   "nodes": [
     {
-      "parameters": { "rule": { "interval": [ { "field": "hours", "hoursInterval": 1 } ] } },
-      "id": "sched-contacts",
+      "parameters": {
+        "content": "## Setup (antes de ativar)\n1. Conecte as credenciais nos nós:\n   • BigQuery = sua Service Account (dataEditor em 03_MKT_SALES + jobUser)\n   • HubSpot = Header Auth: Authorization = Bearer pat-na1-...\n2. As tabelas/views já existem no BigQuery (03_MKT_SALES).\n3. Backfill: TRUNCATE raw_hubspot_* e Tb_HubSpot_* e rode manualmente\n   algumas vezes (Search corta em 10k; a watermark avança sozinha).\n4. Se o INSERT reclamar da coluna _raw (JSON): troque _raw para STRING\n   em raw_hubspot_* e use PARSE_JSON(_raw) no MERGE.\n5. Depois de validar, ative o Schedule.",
+        "height": 300,
+        "width": 460
+      },
+      "id": "c-note",
+      "name": "Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -820,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "c-sched",
       "name": "Schedule",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [ -600, 300 ]
+      "position": [
+        -620,
+        360
+      ]
     },
     {
       "parameters": {
@@ -15,12 +42,20 @@
         "sqlQuery": "SELECT CAST(UNIX_MILLIS(COALESCE(MAX(hs_lastmodifieddate), TIMESTAMP '2015-01-01')) AS STRING) AS wm\nFROM `analytics-contas.03_MKT_SALES.Tb_HubSpot_Contacts`",
         "options": {}
       },
-      "id": "wm-contacts",
+      "id": "c-wm",
       "name": "Get watermark",
       "type": "n8n-nodes-base.googleBigQuery",
       "typeVersion": 2.1,
-      "position": [ -380, 300 ],
-      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+      "position": [
+        -420,
+        360
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "REPLACE_ME",
+          "name": "BigQuery – Service Account (a sua)"
+        }
+      }
     },
     {
       "parameters": {
@@ -30,12 +65,20 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"filterGroups\": [{\"filters\":[{\"propertyName\":\"hs_lastmodifieddate\",\"operator\":\"GTE\",\"value\":\"{{ $json.wm }}\"}]}],\n  \"sorts\": [{\"propertyName\":\"hs_lastmodifieddate\",\"direction\":\"ASCENDING\"}],\n  \"properties\": [\"firstname\",\"lastname\",\"email\",\"lifecyclestage\",\"createdate\",\"hs_lastmodifieddate\",\"hs_analytics_source\",\"hs_analytics_source_data_1\",\"hs_analytics_source_data_2\",\"hs_latest_source\",\"first_conversion_event_name\",\"hs_analytics_first_touch_converting_campaign\",\"hs_v2_date_entered_subscriber\",\"hs_v2_date_entered_lead\",\"hs_v2_date_entered_marketingqualifiedlead\",\"hs_v2_date_entered_salesqualifiedlead\",\"hs_v2_date_entered_opportunity\",\"hs_v2_date_entered_customer\"],\n  \"limit\": 100,\n  \"after\": \"0\"\n}",
+        "jsonBody": "={\n  \"filterGroups\": [{\"filters\":[{\"propertyName\":\"hs_lastmodifieddate\",\"operator\":\"GTE\",\"value\":\"{{ $json.wm }}\"}]}],\n  \"sorts\": [{\"propertyName\":\"hs_lastmodifieddate\",\"direction\":\"ASCENDING\"}],\n  \"properties\": [\"firstname\", \"lastname\", \"email\", \"lifecyclestage\", \"createdate\", \"hs_lastmodifieddate\", \"hs_analytics_source\", \"hs_analytics_source_data_1\", \"hs_analytics_source_data_2\", \"hs_analytics_first_url\", \"hs_latest_source\", \"first_conversion_event_name\", \"hs_analytics_first_touch_converting_campaign\", \"hs_v2_date_entered_subscriber\", \"hs_v2_date_entered_lead\", \"hs_v2_date_entered_marketingqualifiedlead\", \"hs_v2_date_entered_salesqualifiedlead\", \"hs_v2_date_entered_opportunity\", \"hs_v2_date_entered_customer\"],\n  \"limit\": 100,\n  \"after\": \"0\"\n}",
         "options": {
           "pagination": {
             "pagination": {
               "paginationMode": "updateAParameterInEachRequest",
-              "parameters": { "parameters": [ { "type": "body", "name": "after", "value": "={{ $response.body.paging?.next?.after }}" } ] },
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "body",
+                    "name": "after",
+                    "value": "={{ $response.body.paging?.next?.after }}"
+                  }
+                ]
+              },
               "paginationCompleteWhen": "other",
               "completeExpression": "={{ $response.body.paging?.next?.after ? false : true }}",
               "limitPagesFetched": false
@@ -43,68 +86,176 @@
           }
         }
       },
-      "id": "search-contacts",
+      "id": "c-search",
       "name": "HubSpot Search Contacts",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [ -160, 300 ],
-      "credentials": { "httpHeaderAuth": { "id": "REPLACE", "name": "HubSpot Bearer" } }
+      "position": [
+        -200,
+        360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "HubSpot – Bearer token (Service Key)"
+        }
+      }
     },
     {
-      "parameters": { "fieldToSplitOut": "results", "options": {} },
-      "id": "split-contacts",
+      "parameters": {
+        "fieldToSplitOut": "results",
+        "options": {}
+      },
+      "id": "c-split",
       "name": "Split results",
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
-      "position": [ 60, 300 ]
+      "position": [
+        20,
+        360
+      ]
     },
     {
       "parameters": {
         "jsCode": "return items.map(({json: it}) => ({ json: {\n  Contact_ID: it.id,\n  hs_lastmodifieddate: it.properties?.hs_lastmodifieddate ?? null,\n  _synced_at: new Date().toISOString(),\n  _raw: JSON.stringify({ properties: it.properties })\n}}));"
       },
-      "id": "code-contacts",
+      "id": "c-code",
       "name": "Build raw rows",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [ 280, 300 ]
+      "position": [
+        240,
+        360
+      ]
     },
     {
       "parameters": {
         "operation": "insert",
-        "projectId": { "__rl": true, "value": "analytics-contas", "mode": "id" },
-        "datasetId": { "__rl": true, "value": "03_MKT_SALES", "mode": "id" },
-        "tableId": { "__rl": true, "value": "raw_hubspot_contacts", "mode": "id" },
+        "projectId": {
+          "__rl": true,
+          "value": "analytics-contas",
+          "mode": "id"
+        },
+        "datasetId": {
+          "__rl": true,
+          "value": "03_MKT_SALES",
+          "mode": "id"
+        },
+        "tableId": {
+          "__rl": true,
+          "value": "raw_hubspot_contacts",
+          "mode": "id"
+        },
         "dataMode": "autoMapInputData",
         "options": {}
       },
-      "id": "insert-contacts",
+      "id": "c-ins",
       "name": "Append raw_contacts",
       "type": "n8n-nodes-base.googleBigQuery",
       "typeVersion": 2.1,
-      "position": [ 500, 300 ],
-      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+      "position": [
+        460,
+        360
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "REPLACE_ME",
+          "name": "BigQuery – Service Account (a sua)"
+        }
+      }
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "sqlQuery": "-- Cole aqui o MERGE de CONTACTS de sql/02_scheduled_merge.sql",
+        "sqlQuery": "MERGE `analytics-contas.03_MKT_SALES.Tb_HubSpot_Contacts` T\nUSING (\n  SELECT * FROM (\n    SELECT\n      Contact_ID,\n      NULLIF(TRIM(CONCAT(\n        IFNULL(JSON_VALUE(_raw, '$.properties.firstname'), ''), ' ',\n        IFNULL(JSON_VALUE(_raw, '$.properties.lastname'),  ''))), '')     AS Contact_Name,\n      JSON_VALUE(_raw, '$.properties.email')                              AS Contact_Email,\n      JSON_VALUE(_raw, '$.properties.lifecyclestage')                     AS Contact_Lifecycle_Stage,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.createdate') AS TIMESTAMP)  AS Contact_Created_At,\n      JSON_VALUE(_raw, '$.properties.hs_analytics_source')                AS Origem_Raw,\n      CASE JSON_VALUE(_raw, '$.properties.hs_analytics_source')\n        WHEN 'ORGANIC_SEARCH'  THEN 'Busca Orgânica'\n        WHEN 'PAID_SEARCH'     THEN 'Busca Paga'\n        WHEN 'PAID_SOCIAL'     THEN 'Social Pago'\n        WHEN 'SOCIAL_MEDIA'    THEN 'Social Orgânico'\n        WHEN 'EMAIL_MARKETING' THEN 'E-mail Marketing'\n        WHEN 'REFERRALS'       THEN 'Referência'\n        WHEN 'AI_REFERRALS'    THEN 'Referência IA'\n        WHEN 'OTHER_CAMPAIGNS' THEN 'Outras Campanhas'\n        WHEN 'DIRECT_TRAFFIC'  THEN 'Tráfego Direto'\n        WHEN 'OFFLINE'         THEN 'Offline'\n        ELSE 'Não informado'\n      END                                                                 AS Origem,\n      JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_1')         AS Origem_Data_1,\n      JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_2')         AS Origem_Data_2,\n      -- Campanha: para origens pagas, source_data_1 = ID da campanha de Ads (chave de join)\n      IF(JSON_VALUE(_raw, '$.properties.hs_analytics_source') IN ('PAID_SEARCH','PAID_SOCIAL'),\n         JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_1'), NULL)  AS Campaign_ID,\n      IF(JSON_VALUE(_raw, '$.properties.hs_analytics_source') = 'PAID_SEARCH',\n         JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_2'), NULL)  AS Campaign_Keyword,\n      -- Nome legível da campanha: no PAID_SOCIAL (Meta/LinkedIn), source_data_2 traz o\n      -- nome (ex.: '[mdass][leads][aon]...', 'meta_leads_rh_express'). No PAID_SEARCH o\n      -- source_data_2 é a palavra-chave e o nome vem do JOIN por Campaign_ID com as tabelas de Ads.\n      IF(JSON_VALUE(_raw, '$.properties.hs_analytics_source') = 'PAID_SOCIAL',\n         JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_2'), NULL) AS Campaign_Name,\n      JSON_VALUE(_raw, '$.properties.hs_analytics_first_url')             AS First_URL,\n      JSON_VALUE(_raw, '$.properties.hs_latest_source')                   AS Latest_Source,\n      JSON_VALUE(_raw, '$.properties.first_conversion_event_name')        AS First_Conversion,\n      JSON_VALUE(_raw, '$.properties.hs_analytics_first_touch_converting_campaign') AS First_Touch_Campaign,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.hs_v2_date_entered_subscriber')             AS TIMESTAMP) AS Became_Subscriber_Date,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.hs_v2_date_entered_lead')                   AS TIMESTAMP) AS Became_Lead_Date,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.hs_v2_date_entered_marketingqualifiedlead') AS TIMESTAMP) AS Became_MQL_Date,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.hs_v2_date_entered_salesqualifiedlead')     AS TIMESTAMP) AS Became_SQL_Date,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.hs_v2_date_entered_opportunity')            AS TIMESTAMP) AS Became_Opportunity_Date,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.hs_v2_date_entered_customer')               AS TIMESTAMP) AS Became_Customer_Date,\n      hs_lastmodifieddate,\n      _synced_at,\n      ROW_NUMBER() OVER (PARTITION BY Contact_ID ORDER BY hs_lastmodifieddate DESC, _synced_at DESC) AS rn\n    FROM `analytics-contas.03_MKT_SALES.raw_hubspot_contacts`\n  )\n  WHERE rn = 1\n) S\nON T.Contact_ID = S.Contact_ID\nWHEN MATCHED AND S.hs_lastmodifieddate >= T.hs_lastmodifieddate THEN UPDATE SET\n  Contact_Name = S.Contact_Name, Contact_Email = S.Contact_Email,\n  Contact_Lifecycle_Stage = S.Contact_Lifecycle_Stage, Contact_Created_At = S.Contact_Created_At,\n  Origem_Raw = S.Origem_Raw, Origem = S.Origem, Origem_Data_1 = S.Origem_Data_1,\n  Origem_Data_2 = S.Origem_Data_2, Campaign_ID = S.Campaign_ID, Campaign_Keyword = S.Campaign_Keyword,\n  Campaign_Name = S.Campaign_Name, First_URL = S.First_URL, Latest_Source = S.Latest_Source,\n  First_Conversion = S.First_Conversion, First_Touch_Campaign = S.First_Touch_Campaign,\n  Became_Subscriber_Date = S.Became_Subscriber_Date, Became_Lead_Date = S.Became_Lead_Date,\n  Became_MQL_Date = S.Became_MQL_Date, Became_SQL_Date = S.Became_SQL_Date,\n  Became_Opportunity_Date = S.Became_Opportunity_Date, Became_Customer_Date = S.Became_Customer_Date,\n  hs_lastmodifieddate = S.hs_lastmodifieddate, _synced_at = S._synced_at\nWHEN NOT MATCHED THEN INSERT (\n  Contact_ID, Contact_Name, Contact_Email, Contact_Lifecycle_Stage, Contact_Created_At,\n  Origem_Raw, Origem, Origem_Data_1, Origem_Data_2, Campaign_ID, Campaign_Keyword, Campaign_Name,\n  First_URL, Latest_Source, First_Conversion,\n  First_Touch_Campaign, Became_Subscriber_Date, Became_Lead_Date, Became_MQL_Date,\n  Became_SQL_Date, Became_Opportunity_Date, Became_Customer_Date, hs_lastmodifieddate, _synced_at\n) VALUES (\n  S.Contact_ID, S.Contact_Name, S.Contact_Email, S.Contact_Lifecycle_Stage, S.Contact_Created_At,\n  S.Origem_Raw, S.Origem, S.Origem_Data_1, S.Origem_Data_2, S.Campaign_ID, S.Campaign_Keyword, S.Campaign_Name,\n  S.First_URL, S.Latest_Source, S.First_Conversion,\n  S.First_Touch_Campaign, S.Became_Subscriber_Date, S.Became_Lead_Date, S.Became_MQL_Date,\n  S.Became_SQL_Date, S.Became_Opportunity_Date, S.Became_Customer_Date, S.hs_lastmodifieddate, S._synced_at\n);",
         "options": {}
       },
-      "id": "merge-contacts",
+      "id": "c-merge",
       "name": "MERGE contacts",
       "type": "n8n-nodes-base.googleBigQuery",
       "typeVersion": 2.1,
-      "position": [ 720, 300 ],
-      "credentials": { "googleBigQueryOAuth2Api": { "id": "REPLACE", "name": "BigQuery SA" } }
+      "position": [
+        680,
+        360
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "REPLACE_ME",
+          "name": "BigQuery – Service Account (a sua)"
+        }
+      }
     }
   ],
   "connections": {
-    "Schedule": { "main": [ [ { "node": "Get watermark", "type": "main", "index": 0 } ] ] },
-    "Get watermark": { "main": [ [ { "node": "HubSpot Search Contacts", "type": "main", "index": 0 } ] ] },
-    "HubSpot Search Contacts": { "main": [ [ { "node": "Split results", "type": "main", "index": 0 } ] ] },
-    "Split results": { "main": [ [ { "node": "Build raw rows", "type": "main", "index": 0 } ] ] },
-    "Build raw rows": { "main": [ [ { "node": "Append raw_contacts", "type": "main", "index": 0 } ] ] },
-    "Append raw_contacts": { "main": [ [ { "node": "MERGE contacts", "type": "main", "index": 0 } ] ] }
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Get watermark",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get watermark": {
+      "main": [
+        [
+          {
+            "node": "HubSpot Search Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot Search Contacts": {
+      "main": [
+        [
+          {
+            "node": "Split results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split results": {
+      "main": [
+        [
+          {
+            "node": "Build raw rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build raw rows": {
+      "main": [
+        [
+          {
+            "node": "Append raw_contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append raw_contacts": {
+      "main": [
+        [
+          {
+            "node": "MERGE contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
 }
