@@ -162,6 +162,7 @@
         480,
         360
       ],
+      "executeOnce": true,
       "credentials": {
         "googleApi": {
           "id": "REPLACE_ME",

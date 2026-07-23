@@ -50,6 +50,7 @@
         -420,
         360
       ],
+      "executeOnce": false,
       "credentials": {
         "googleApi": {
           "id": "REPLACE_ME",
@@ -178,6 +179,7 @@
         680,
         360
       ],
+      "executeOnce": true,
       "credentials": {
         "googleApi": {
           "id": "REPLACE_ME",
