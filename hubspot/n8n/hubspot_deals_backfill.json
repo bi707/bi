@@ -1,0 +1,238 @@
+{
+  "name": "HubSpot Deals BACKFILL (list + associations, sem watermark)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## BACKFILL (rodada única, manual)\nUsa o endpoint LIST (sem teto de 10k) e pagina por 'after' na QUERY STRING.\n1. Conecte as credenciais (BigQuery Service Account + HubSpot Bearer).\n2. TRUNCATE raw_hubspot_* e Tb_HubSpot_* antes de rodar.\n3. Clique em 'Test workflow' UMA vez — ele pagina tudo sozinho.\n4. Depois use os workflows de Search (incremental) no Schedule diário.",
+        "height": 260,
+        "width": 520
+      },
+      "id": "bd-note",
+      "name": "Backfill",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -820,
+        120
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "bd-man",
+      "name": "Manual (Backfill)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.hubapi.com/crm/v3/objects/deals",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "100"
+            },
+            {
+              "name": "properties",
+              "value": "dealname,pipeline,dealstage,amount,deal_currency_code,createdate,closedate,hs_lastmodifieddate,hs_is_closed,hs_is_closed_won,hs_analytics_source,hs_analytics_source_data_1,hs_analytics_source_data_2"
+            },
+            {
+              "name": "archived",
+              "value": "false"
+            },
+            {
+              "name": "associations",
+              "value": "contacts"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "after",
+                    "value": "={{ $response.body.paging?.next?.after }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $response.body.paging?.next?.after ? false : true }}",
+              "limitPagesFetched": false
+            }
+          }
+        }
+      },
+      "id": "bd-list",
+      "name": "HubSpot List Deals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "HubSpot – Bearer token (Service Key)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "results",
+        "options": {}
+      },
+      "id": "bd-split",
+      "name": "Split results",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -180,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(({json: it}) => ({ json: {\n  Deal_ID: it.id,\n  hs_lastmodifieddate: it.properties?.hs_lastmodifieddate ?? null,\n  _synced_at: new Date().toISOString(),\n  _raw: JSON.stringify({ properties: it.properties, associations: it.associations || {} })\n}}));"
+      },
+      "id": "bd-code",
+      "name": "Build raw deal rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "projectId": {
+          "__rl": true,
+          "value": "analytics-contas",
+          "mode": "id"
+        },
+        "datasetId": {
+          "__rl": true,
+          "value": "03_MKT_SALES",
+          "mode": "id"
+        },
+        "tableId": {
+          "__rl": true,
+          "value": "raw_hubspot_deals",
+          "mode": "id"
+        },
+        "dataMode": "autoMapInputData",
+        "options": {}
+      },
+      "id": "bd-ins",
+      "name": "Append raw_deals",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        360
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "REPLACE_ME",
+          "name": "BigQuery – Service Account (a sua)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "sqlQuery": "MERGE `analytics-contas.03_MKT_SALES.Tb_HubSpot_Deals` T\nUSING (\n  SELECT * FROM (\n    SELECT\n      Deal_ID,\n      JSON_VALUE(_raw, '$.properties.dealname')                          AS Deal_Name,\n      JSON_VALUE(_raw, '$.properties.pipeline')                          AS Pipeline_ID,\n      JSON_VALUE(_raw, '$.properties.dealstage')                         AS Pipeline_Stage_ID,\n      CASE\n        WHEN JSON_VALUE(_raw, '$.properties.hs_is_closed_won') = 'true' THEN 'won'\n        WHEN JSON_VALUE(_raw, '$.properties.hs_is_closed')     = 'true' THEN 'lost'\n        ELSE 'open'\n      END                                                                AS Deal_Status,\n      JSON_VALUE(_raw, '$.properties.hs_is_closed_won') = 'true'         AS Deal_Win,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.amount') AS NUMERIC)       AS Deal_Amount,\n      JSON_VALUE(_raw, '$.properties.deal_currency_code')                AS Deal_Currency,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.createdate') AS TIMESTAMP) AS Deal_Created_Date,\n      SAFE_CAST(JSON_VALUE(_raw, '$.properties.closedate')  AS TIMESTAMP) AS Deal_Closed_Date,\n      JSON_VALUE(_raw, '$.properties.hs_analytics_source')               AS Deal_Source_Raw,\n      CASE JSON_VALUE(_raw, '$.properties.hs_analytics_source')\n        WHEN 'ORGANIC_SEARCH'  THEN 'Busca Orgânica'\n        WHEN 'PAID_SEARCH'     THEN 'Busca Paga'\n        WHEN 'PAID_SOCIAL'     THEN 'Social Pago'\n        WHEN 'SOCIAL_MEDIA'    THEN 'Social Orgânico'\n        WHEN 'EMAIL_MARKETING' THEN 'E-mail Marketing'\n        WHEN 'REFERRALS'       THEN 'Referência'\n        WHEN 'AI_REFERRALS'    THEN 'Referência IA'\n        WHEN 'OTHER_CAMPAIGNS' THEN 'Outras Campanhas'\n        WHEN 'DIRECT_TRAFFIC'  THEN 'Tráfego Direto'\n        WHEN 'OFFLINE'         THEN 'Offline'\n        ELSE 'Não informado'\n      END                                                                AS Deal_Source,\n      JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_1')        AS Deal_Source_Data_1,\n      JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_2')        AS Deal_Source_Data_2,\n      IF(JSON_VALUE(_raw, '$.properties.hs_analytics_source') IN ('PAID_SEARCH','PAID_SOCIAL'),\n         JSON_VALUE(_raw, '$.properties.hs_analytics_source_data_1'), NULL) AS Campaign_ID,\n      -- associação com contato (primeiro contato associado)\n      COALESCE(\n        JSON_VALUE(_raw, '$.associations.contacts.results[0].id'),\n        JSON_VALUE(_raw, '$.associations.contacts[0].id')\n      )                                                                  AS Contact_ID,\n      hs_lastmodifieddate,\n      _synced_at,\n      ROW_NUMBER() OVER (PARTITION BY Deal_ID ORDER BY hs_lastmodifieddate DESC, _synced_at DESC) AS rn\n    FROM `analytics-contas.03_MKT_SALES.raw_hubspot_deals`\n  )\n  WHERE rn = 1\n) S\nON T.Deal_ID = S.Deal_ID\nWHEN MATCHED AND S.hs_lastmodifieddate >= T.hs_lastmodifieddate THEN UPDATE SET\n  Deal_Name = S.Deal_Name, Pipeline_ID = S.Pipeline_ID, Pipeline_Stage_ID = S.Pipeline_Stage_ID,\n  Deal_Status = S.Deal_Status, Deal_Win = S.Deal_Win, Deal_Amount = S.Deal_Amount,\n  Deal_Currency = S.Deal_Currency, Deal_Created_Date = S.Deal_Created_Date,\n  Deal_Closed_Date = S.Deal_Closed_Date, Deal_Source_Raw = S.Deal_Source_Raw,\n  Deal_Source = S.Deal_Source, Deal_Source_Data_1 = S.Deal_Source_Data_1,\n  Deal_Source_Data_2 = S.Deal_Source_Data_2, Campaign_ID = S.Campaign_ID, Contact_ID = S.Contact_ID,\n  hs_lastmodifieddate = S.hs_lastmodifieddate, _synced_at = S._synced_at\nWHEN NOT MATCHED THEN INSERT (\n  Deal_ID, Deal_Name, Pipeline_ID, Pipeline_Stage_ID, Deal_Status, Deal_Win, Deal_Amount,\n  Deal_Currency, Deal_Created_Date, Deal_Closed_Date, Deal_Source_Raw, Deal_Source,\n  Deal_Source_Data_1, Deal_Source_Data_2, Campaign_ID, Contact_ID, hs_lastmodifieddate, _synced_at\n) VALUES (\n  S.Deal_ID, S.Deal_Name, S.Pipeline_ID, S.Pipeline_Stage_ID, S.Deal_Status, S.Deal_Win, S.Deal_Amount,\n  S.Deal_Currency, S.Deal_Created_Date, S.Deal_Closed_Date, S.Deal_Source_Raw, S.Deal_Source,\n  S.Deal_Source_Data_1, S.Deal_Source_Data_2, S.Campaign_ID, S.Contact_ID, S.hs_lastmodifieddate, S._synced_at\n);",
+        "options": {}
+      },
+      "id": "bd-merge",
+      "name": "MERGE deals",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [
+        480,
+        360
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "REPLACE_ME",
+          "name": "BigQuery – Service Account (a sua)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual (Backfill)": {
+      "main": [
+        [
+          {
+            "node": "HubSpot List Deals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot List Deals": {
+      "main": [
+        [
+          {
+            "node": "Split results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split results": {
+      "main": [
+        [
+          {
+            "node": "Build raw deal rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build raw deal rows": {
+      "main": [
+        [
+          {
+            "node": "Append raw_deals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append raw_deals": {
+      "main": [
+        [
+          {
+            "node": "MERGE deals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
